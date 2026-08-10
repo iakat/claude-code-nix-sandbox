@@ -71,14 +71,10 @@ let
           noCheck = true;
         };
 
-        # Git config via 9p (nofail: may not exist on host)
-        virtualisation.fileSystems."/home/sandbox/.gitconfig" = {
-          device = "git_config";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "ro" "nofail" ];
-          noCheck = true;
-        };
-
+        # Git per-directory config via 9p (nofail: may not exist on host).
+        # ~/.gitconfig is a FILE, not a directory, and 9p local driver can only
+        # export directories — so that file is seeded by copy through the meta
+        # dir instead (see the launcher script and interactiveShellInit below).
         virtualisation.fileSystems."/home/sandbox/.config/git" = {
           device = "git_config_dir";
           fsType = "9p";
@@ -158,11 +154,17 @@ let
               sudo mkdir -p "$host_home"
               sudo chown sandbox:users "$host_home"
               # Symlink dotfiles from fixed 9p mount to real home path
-              for item in .claude .gitconfig .config .ssh; do
+              for item in .claude .config .ssh; do
                 if [[ -e "/home/sandbox/$item" ]]; then
                   ln -sfn "/home/sandbox/$item" "$host_home/$item"
                 fi
               done
+              # .gitconfig is a file, not a directory — 9p can't export it.
+              # Copy it from metadata (like claude.json below).
+              if [[ -f /mnt/meta/gitconfig ]]; then
+                cp /mnt/meta/gitconfig "$host_home/.gitconfig"
+                chmod 644 "$host_home/.gitconfig"
+              fi
               # Claude config seeded by copy from metadata (carries
               # oauthAccount/onboarding state; guest writes stay in the VM)
               if [[ -f /mnt/meta/claude.json ]]; then
@@ -410,7 +412,7 @@ writeShellApplication {
     fi
 
     if [[ -f "$HOME/.gitconfig" ]]; then
-      qemu_extra+=(-virtfs "local,path=$HOME/.gitconfig,mount_tag=git_config,security_model=none,id=git_config,readonly=on")
+      cp "$HOME/.gitconfig" "$meta_dir/gitconfig"
     fi
     if [[ -d "$HOME/.config/git" ]]; then
       qemu_extra+=(-virtfs "local,path=$HOME/.config/git,mount_tag=git_config_dir,security_model=none,id=git_config_dir,readonly=on")
