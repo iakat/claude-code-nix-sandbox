@@ -35,6 +35,7 @@ let
           cores = 4;
           diskSize = 10240;
           graphics = true;
+          docker.enable = true;
           diskImage = "/tmp/claude-sandbox-vm.qcow2";
           # No virtualisation.vlans: that option belongs to the NixOS test
           # framework, not qemu-vm.nix, and nixpkgs no longer defines it here.
@@ -224,7 +225,7 @@ let
           isNormalUser = true;
           home = "/home/sandbox";
           uid = 1000;
-          extraGroups = [ "video" "audio" "wheel" ];
+          extraGroups = [ "video" "audio" "wheel" "docker" ];
         };
 
         environment.systemPackages = spec.packages ++ [ pkgs.chromium ];
