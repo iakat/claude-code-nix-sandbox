@@ -33,6 +33,7 @@ let
         virtualisation = {
           memorySize = 4096;
           cores = 4;
+          diskSize = 10240;
           graphics = true;
           diskImage = "/tmp/claude-sandbox-vm.qcow2";
           # No virtualisation.vlans: that option belongs to the NixOS test
