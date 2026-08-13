@@ -36,7 +36,7 @@ let
           diskSize = 10240;
           graphics = true;
           docker.enable = true;
-          diskImage = "/tmp/claude-sandbox-vm.qcow2";
+          diskImage = "$HOME/.claudesandbox/claude-sandbox-vm.qcow2";
           # No virtualisation.vlans: that option belongs to the NixOS test
           # framework, not qemu-vm.nix, and nixpkgs no longer defines it here.
           # A mkIf with a false condition still requires the option to exist,
@@ -336,24 +336,21 @@ writeShellApplication {
 
     sandbox_notice=${lib.escapeShellArg (spec.sandboxNotice "vm")}"${spec.persistenceNotice "$project_dir"}"
 
-    # Clean up stale VM temp files from previous runs killed with SIGKILL
+    # Clean up stale metadata temp dirs from previous runs killed with SIGKILL.
+    # The disk image is now persistent (see below), so it is deliberately NOT
+    # swept here — only the per-run metadata dir is ephemeral.
     for stale in /tmp/claude-vm-meta.*/; do
       [[ -d "$stale" ]] || continue
       rm -rf "$stale"
     done
-    for stale in /tmp/claude-sandbox-vm.*.qcow2; do
-      [[ -f "$stale" ]] || continue
-      if ! fuser "$stale" &>/dev/null; then
-        rm -f "$stale"
-      fi
-    done
 
     # Create metadata directory (entrypoint + API key)
     meta_dir="$(mktemp -d /tmp/claude-vm-meta.XXXXXX)"
-    # Use unique disk image path to avoid collisions between concurrent runs
-    NIX_DISK_IMAGE="$(mktemp /tmp/claude-sandbox-vm.XXXXXX.qcow2)"
+
+    disk_root="$HOME/.claudesandbox"
+    mkdir -p "$disk_root"
+    NIX_DISK_IMAGE="$disk_root/$sd_base-$sd_hash.qcow2"
     export NIX_DISK_IMAGE
-    rm -f "$NIX_DISK_IMAGE"  # QEMU creates it; we just need a unique name
     trap 'rm -rf "$meta_dir" "$NIX_DISK_IMAGE"' EXIT
 
     if [[ "$shell_mode" == true ]]; then
@@ -425,7 +422,7 @@ writeShellApplication {
     fi
 
     export QEMU_OPTS="''${qemu_extra[*]}"
-    exec ${vmScript}/bin/run-claude-sandbox-vm
+    ${vmScript}/bin/run-claude-sandbox-vm
   '';
 }
 # Expose the guest system closure so checks can assert against the generated
