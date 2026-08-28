@@ -117,6 +117,7 @@ Non-obvious patterns discovered during development — read before modifying rel
 - `artifacts/skills/bubblewrap-dynamic-bash-arrays-for-optional-flags.md — bash arrays for conditional bwrap/nspawn flags`
 - `artifacts/skills/nspawn-privilege-drop-without-pam.md — why `setpriv` instead of `su`/`runuser` in the container backend`
 - `artifacts/skills/nixos-qemu-vm-serial-console-setup.md — console order, getty autologin, and tty guard for the VM backend`
+- `artifacts/skills/nixos-qemu-vm-headless-display-none.md — graphics=true adds no -display (GTK default dies headless); append -display none via $QEMU_OPTS, probe DISPLAY with xset, last -display wins`
 - `artifacts/skills/nix-daemon-socket-forwarding-in-sandboxes.md — rw socket bind + `NIX_REMOTE=daemon` for nix inside sandboxes`
 - `artifacts/skills/ssh-agent-forwarding-into-sandboxes.md — socket + env var + openssh + git config forwarding`
 - `artifacts/skills/sudo-aware-uid-detection-for-containers.md — dynamic UID/GID under sudo for file ownership`

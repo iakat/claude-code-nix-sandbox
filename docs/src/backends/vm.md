@@ -11,6 +11,7 @@ nix build github:jhhuh/claude-code-nix-sandbox#vm
 # Run
 ./result/bin/claude-sandbox-vm /path/to/project
 ./result/bin/claude-sandbox-vm --shell /path/to/project
+./result/bin/claude-sandbox-vm --headless /path/to/project  # no QEMU window
 
 # Without network
 nix build github:jhhuh/claude-code-nix-sandbox#vm-no-network
@@ -23,7 +24,7 @@ The backend imports `nix/sandbox-spec.nix` for the canonical package list and Ch
 
 - **4 GB RAM, 4 cores** (defaults from `virtualisation` module)
 - **Serial console on stdio** for Claude Code interaction
-- **QEMU GTK window** running Xorg + Openbox for Chromium display
+- **QEMU GTK window** running Xorg + Openbox for Chromium display (omitted automatically on headless hosts)
 - **9p filesystem shares** for project directory, auth, git config, SSH keys, and metadata
 
 ### Console setup
@@ -31,6 +32,20 @@ The backend imports `nix/sandbox-spec.nix` for the canonical package list and Ch
 The VM has two consoles: `tty0` (QEMU window) and `ttyS0` (serial/stdio). The serial console is listed last in `virtualisation.qemu.consoles` so Linux makes it `/dev/console`. Getty auto-logs in the `sandbox` user on ttyS0.
 
 A tty guard in `interactiveShellInit` ensures the entrypoint (Claude Code or bash) only runs on ttyS0, not on the graphical tty0. See `artifacts/skills/nixos-qemu-vm-serial-console-setup.md`.
+
+### Headless operation
+
+With `virtualisation.graphics = true`, nixpkgs' `qemu-vm.nix` passes no `-display` flag, so QEMU falls back to its default GTK UI — which fails with `gtk initialization failed` when there is no display (e.g. a plain SSH session on a server).
+
+The launcher auto-detects this: if neither `DISPLAY` nor `WAYLAND_DISPLAY` points to a usable display (a set `DISPLAY` is probed with `xset` to catch stale SSH X11 forwarding), it appends `-display none` to `QEMU_OPTS`. Only the host-side window is dropped — the guest's Xorg and Chromium still render to the emulated VGA, and Claude Code still runs on the serial console. `--headless` forces this even when a display is available.
+
+To watch a headless VM's screen from another machine, add a VNC viewer on top of the disabled frontend:
+
+```bash
+QEMU_OPTS="-vnc :0" ./result/bin/claude-sandbox-vm /path/to/project
+```
+
+(QEMU keeps a single `-display` config and the last `-display` wins, so a user-provided `QEMU_OPTS` is appended after the launcher's flags and overrides them.) See `artifacts/skills/nixos-qemu-vm-headless-display-none.md`.
 
 ### 9p filesystem shares
 

@@ -1,6 +1,6 @@
 # QEMU VM backend for Claude Code + Chromium
 #
-# Usage: claude-sandbox-vm [--shell] [--gh-token] [project-dir] [-- claude args...]
+# Usage: claude-sandbox-vm [--shell] [--gh-token] [--headless] [project-dir] [-- claude args...]
 #        project-dir defaults to the current directory; args after -- go to claude
 #
 # Launches a NixOS VM via QEMU with claude-code and chromium.
@@ -14,6 +14,7 @@
   coreutils,
   nixos,
   socat,
+  xorg,
   # Toggle host network access (set false for isolated network)
   network ? true,
   # Additional NixOS modules for the VM
@@ -270,12 +271,13 @@ let
 in
 writeShellApplication {
   name = "claude-sandbox-vm";
-  runtimeInputs = [ coreutils socat ];
+  runtimeInputs = [ coreutils socat xorg.xset ];
 
   text = ''
     shell_mode=false
     enter_mode=false
     gh_token=false
+    headless_mode=false
     project_dir="."
     claude_args=()
 
@@ -288,6 +290,7 @@ writeShellApplication {
       echo "  --shell     Drop into bash instead of launching claude" >&2
       echo "  --enter     Open a shell INSIDE this project's running VM" >&2
       echo "  --gh-token  Forward GH_TOKEN/GITHUB_TOKEN env vars into VM" >&2
+      echo "  --headless  Force -display none even when a display is available" >&2
     }
 
     while [[ $# -gt 0 ]]; do
@@ -295,6 +298,7 @@ writeShellApplication {
         --shell)    shell_mode=true; shift ;;
         --enter)    enter_mode=true; shift ;;
         --gh-token) gh_token=true; shift ;;
+        --headless) headless_mode=true; shift ;;
         --help|-h)  usage; exit 0 ;;
         --)         shift; claude_args=("$@"); break ;;
         -*)         echo "Unknown option: $1 (pass claude args after '--')" >&2; exit 1 ;;
@@ -421,7 +425,44 @@ writeShellApplication {
       qemu_extra+=(-virtfs "local,path=$HOME/.ssh,mount_tag=ssh_dir,security_model=none,id=ssh_dir,readonly=on")
     fi
 
-    export QEMU_OPTS="''${qemu_extra[*]}"
+    # Headless handling. qemu-vm.nix with graphics=true emits NO -display
+    # flag, so QEMU falls back to its default UI (GTK in the nixpkgs build)
+    # and dies with "gtk initialization failed" when nothing can open a
+    # window (plain SSH, or DISPLAY leaked into tmux from a dead session).
+    # -display none only drops the host-side window: the guest's Xorg and
+    # Chromium render to the emulated VGA regardless, and claude talks over
+    # the -serial stdio console.
+    if [[ "$headless_mode" != true ]]; then
+      if [[ -n "''${DISPLAY:-}" ]]; then
+        # DISPLAY set but unreachable (stale SSH -X, dead tmux env):
+        # probe the X server. `if !` keeps errexit off the failing probe.
+        if ! xset -q >/dev/null 2>&1; then
+          headless_mode=true
+        fi
+      elif [[ -n "''${WAYLAND_DISPLAY:-}" && -n "''${XDG_RUNTIME_DIR:-}" ]]; then
+        # Wayland only: no X client for a cheap probe, check the
+        # compositor socket directly (same convention as bubblewrap.nix).
+        if [[ ! -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then
+          headless_mode=true
+        fi
+      else
+        # Neither DISPLAY nor a complete Wayland env: definitely headless.
+        # This is the branch a plain SSH session (and the manager, which
+        # launches VMs without DISPLAY) hits.
+        headless_mode=true
+      fi
+    fi
+    if [[ "$headless_mode" == true ]]; then
+      # Two separate array elements: $QEMU_OPTS is word-split by the
+      # generated run script, so QEMU must see "-display" and "none".
+      qemu_extra+=(-display none)
+      echo "Headless: no usable display, starting QEMU without a window (Chromium still renders inside the VM)" >&2
+    fi
+
+    # QEMU keeps a single display config and the LAST -display wins, so a
+    # user-provided QEMU_OPTS appended here overrides our default (e.g.
+    # QEMU_OPTS='-vnc :0' to watch a headless VM from another machine).
+    export QEMU_OPTS="''${qemu_extra[*]} ''${QEMU_OPTS:-}"
     ${vmScript}/bin/run-claude-sandbox-vm
   '';
 }

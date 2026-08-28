@@ -38,5 +38,6 @@ All backends accept:
 
 - `--shell` — drop into bash instead of launching Claude Code
 - `--gh-token` — forward `GH_TOKEN`/`GITHUB_TOKEN` env vars into the sandbox
+- `--headless` — (VM only) force `-display none`; the VM backend also falls back to this automatically when no display is available
 - `<project-dir>` — the directory to mount read-write inside the sandbox
 - Additional arguments after the project directory are passed to `claude`

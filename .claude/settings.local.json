@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '{print $NF}')",
+      "Bash(git checkout *)",
+      "Bash(git stash *)",
+      "Bash(git config *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

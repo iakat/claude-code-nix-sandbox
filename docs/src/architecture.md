@@ -50,7 +50,7 @@ Each backend follows the same structure:
 2. **Import spec** — `spec = import ../sandbox-spec.nix { inherit pkgs; }` for packages and /etc paths
 3. **Build a PATH or system closure** — `symlinkJoin` with `spec.packages` (bubblewrap) or `nixosSystem` with `spec.packages` in `environment.systemPackages` (container/VM)
 4. **Generate a shell script** via `writeShellApplication` that:
-   - Parses `--shell`, `--gh-token` flags and project directory argument
+   - Parses `--shell`, `--gh-token` (and `--headless` for the VM) flags and project directory argument
    - Conditionally builds arrays of flags for display, D-Bus, GPU, audio, auth, git, SSH, network
    - Execs the sandbox runtime (`bwrap`, `systemd-nspawn`, or QEMU VM script)
 
