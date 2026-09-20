@@ -15,7 +15,7 @@ nix/chromium.nix       # Chromium wrapper with extension policy (accepts chromeE
 nix/backends/
   bubblewrap.nix       # bwrap sandbox — unprivileged, user namespaces
   container.nix        # systemd-nspawn container — requires root, full namespace isolation
-  vm.nix               # QEMU VM — separate kernel, hardware virtualization
+  vm.nix               # microvm.nix VM — separate kernel, hardware virtualization
 nix/modules/
   sandbox.nix          # NixOS module for declarative sandbox configuration
   manager.nix          # NixOS module for the manager systemd service
@@ -42,7 +42,7 @@ manager/               # Rust/Axum web dashboard + REST API
 
 All backends are `callPackage`-able functions producing `writeShellApplication` derivations. They import `nix/sandbox-spec.nix` for the canonical package list, Chrome extension IDs, and `/etc` paths, then implement the backend-specific delivery mechanism. They share a common pattern: dynamic bash arrays for optional flags (display, D-Bus, GPU, auth, network).
 
-**Bubblewrap** uses `symlinkJoin` to build PATH from packages. **Container** evaluates a NixOS config (`nixosSystem`) to get a system closure (`toplevel`), creates an ephemeral container root, and uses `setpriv` to drop from root to the real user's UID/GID (detected via `SUDO_USER`). **VM** builds a full NixOS VM with Xorg+openbox for Chromium display and serial console for claude-code interaction; shares directories via virtiofs (one `virtiofsd` per share — 9p cannot mmap SQLite WAL shared memory, see the vm-virtiofs skill).
+**Bubblewrap** uses `symlinkJoin` to build PATH from packages. **Container** evaluates a NixOS config (`nixosSystem`) to get a system closure (`toplevel`), creates an ephemeral container root, and uses `setpriv` to drop from root to the real user's UID/GID (detected via `SUDO_USER`). **VM** builds a full guest system with `microvm.nix` (`github:microvm-nix/microvm.nix`) and runs it on QEMU: headless (tmux on the serial console for the agent, Xvfb inside the guest for Chromium), the guest's own erofs store image overlaid with a sparse per-project writable volume, and a multicast socket LAN shared by all VMs started from the same state root. Shares ride virtiofs (one `virtiofsd` per share) because 9p cannot mmap SQLite WAL shared memory (see the vm-virtiofs skill).
 
 ### Remote Manager
 
@@ -75,7 +75,7 @@ sudo ./result/bin/claude-sandbox-container --stop <dir>  # Terminate the contain
 nix build .#vm --builders ''             # VM (remote builder fails on initrd; build locally)
 ./result/bin/claude-sandbox-vm <dir>      # VM mode
 ./result/bin/claude-sandbox-vm --shell <dir>  # VM shell
-./result/bin/claude-sandbox-vm --enter <dir>  # Shell inside the RUNNING VM (2nd serial console)
+./result/bin/claude-sandbox-vm --stop <dir>   # Terminate the project's VM (QMP)
 
 # Remote manager
 nix build .#manager                       # Build manager daemon
@@ -117,8 +117,9 @@ Non-obvious patterns discovered during development — read before modifying rel
 
 - `artifacts/skills/bubblewrap-dynamic-bash-arrays-for-optional-flags.md — bash arrays for conditional bwrap/nspawn flags`
 - `artifacts/skills/nspawn-privilege-drop-without-pam.md — why `setpriv` instead of `su`/`runuser` in the container backend`
-- `artifacts/skills/nixos-qemu-vm-serial-console-setup.md — console order, getty autologin, and tty guard for the VM backend`
-- `artifacts/skills/nixos-qemu-vm-headless-display-none.md — graphics=true adds no -display (GTK default dies headless); append -display none via $QEMU_OPTS, probe DISPLAY with xset, last -display wins`
+- `artifacts/skills/nixos-qemu-vm-serial-console-setup.md — serial console pattern: ttyS0 on stdio with autologin + tmux entrypoint (the VM now ships one console; the ttyS1 second-serial pattern is documented for when it's needed again)`
+- `artifacts/skills/microvm-nix-headless-vm-xvfb.md — microvm.nix is headless (no display device); graphics.enable needs GL, the microvm machine ignores -vga; Xvfb inside the guest, screenshots from the shared state dir`
+- `artifacts/skills/microvm-nix-cli-vm-integration.md — driving microvm.nix without a host module: build-time vs runtime options, extraArgsScript word-splitting, store image + overlay unit, KVM-less boot limits (microvm machine: acpi=on has no TCG timer, acpi=off caps virtio-mmio at 8 transports — hence sandbox-kvm), memfd/vhost-user and why KSM cannot dedupe shared RAM`
 - `artifacts/skills/nix-daemon-socket-forwarding-in-sandboxes.md — rw socket bind + `NIX_REMOTE=daemon` for nix inside sandboxes`
 - `artifacts/skills/ssh-agent-forwarding-into-sandboxes.md — socket + env var + openssh + git config forwarding`
 - `artifacts/skills/sudo-aware-uid-detection-for-containers.md — dynamic UID/GID under sudo for file ownership`

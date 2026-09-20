@@ -569,3 +569,177 @@ died under 9p. Multi-VM: two VMs sharing the host `~/.omp` ran three
 concurrent `BEGIN IMMEDIATE` writer processes (20 txns each) through their
 own virtiofsd daemons: 60/60 rows, `integrity_check ok` from both guests.
 `vm-mounts` check now asserts `virtiofs` fstab lines.
+
+## 2026-09-20 — VM backend rebuilt on microvm.nix (headless, omp, sandbox LAN)
+
+Replaced the `qemu-vm.nix` guest with one built from
+[microvm.nix](https://github.com/microvm-nix/microvm.nix), launched by the same
+CLI. The guest's shape changed with it, following asks made during the session:
+headless with tmux as the interface, all VMs on one network, dedup of store and
+RAM, **no host store inside the guest** (it can hold credentials), latest kernel
+plus max-speed tuning, and omp as the default agent with a Ctrl-a tmux prefix.
+
+What the VM is now:
+
+- headless: no display device, `-nographic`; Chromium renders into a guest Xvfb
+  and is screenshotted from inside the guest
+- tmux on ttyS0 runs the entrypoint (`omp --append-system-prompt <notice>` by
+  default, bash in `--shell` mode); `--enter` gets an interactive shell on ttyS1
+- the guest's own erofs store image (one artifact per build, never the host
+  store) overlaid with a sparse per-project volume; a second volume for docker;
+  `~/.local` in the state dir
+- two NICs: slirp NAT when `network = true`, plus a multicast socket LAN shared
+  by every VM of a state root, each with a stable per-project address
+- 4 GB / 4 vCPU, latest stable kernel, `mitigations=off`, tuned sysctls
+
+Measured on this machine (no `/dev/kvm`, so everything below is TCG):
+
+- boot to multi-user **1m19s** (7.3s kernel + 25.0s initrd + 46.2s userspace);
+  ~1m46s with two VMs booting at once. Before the fixes: >5 min and it never
+  finished, with docker's `/var/lib/docker` fsck alone taking ~1.5 min
+- sandbox LAN: 2/2 pings, 0% loss, 1.7–6.7 ms between two VMs
+- guest store: 926 entries, none of the host's paths visible
+- Chromium in the guest: `--headless=new --dump-dom` exits 0; on Xvfb two
+  chrome processes run and the screenshot is 30 KB vs 390 bytes for an empty
+  Xvfb screen
+- volumes: 10 GiB apparent, 4.3 MB on disk
+- SIGTERM to a VM's QEMU leaves **0** leaked virtiofsd (before: nine per VM)
+
+Eight bugs found and fixed on the way, each by the measurement that exposed it:
+
+1. **Writable store double-mounted read-only.** `writableStoreOverlay` marks the
+   `/nix/store` overlay `neededForBoot`; nixpkgs prefixes its dirs with
+   `/sysroot` for the initrd and the same fstab entry is consumed again in stage
+   2 — `/proc/mounts` showed *two* `overlay /nix/store` mounts, the outer one
+   `ro,nosuid,nodev`, so writes failed EROFS and even `mount -o remount,rw` was
+   refused ("No changes allowed in reconfigure"). Fix: leave
+   `writableStoreOverlay = null` (the image mounts read-only at `/nix/store`,
+   all the initrd needs) and mount the overlay from a unit — bind the read-only
+   view at `/nix/.ro-store`, overlay the volume on top. That unit must `mkdir`
+   upper/work itself: mounts.nix only does it for a *declared* overlay (first
+   attempt: `failed to resolve '/nix/.rw-store/store': -2`).
+2. **The `microvm` machine type stalls under TCG.** Its `pit=off` default leaves
+   the kernel without a calibratable clock: three console lines in ten minutes,
+   100% CPU per vCPU. With a PIT the same kernel reached systemd in 9s. Switched
+   to `qemu.machine = "q35"`, which also provides PCI for `vhost-user-fs-pci`
+   (needed because this config declares no `microvm.shares` for microvm.nix to
+   infer PCI from).
+3. **microvm.nix defaults require KVM.** `cpu = null` emits `-cpu host` plus
+   `-enable-kvm`; without `/dev/kvm` QEMU *exits* rather than falling back, and
+   `-accel` cannot be layered on (`-accel` vs `-machine accel=` is rejected).
+   Naming a CPU model (`max,-sgx`) drops `-enable-kvm` and leaves `kvm:tcg`
+   (pin `qemu.package` back to `qemu_kvm`; setting `cpu` otherwise switches to
+   the full qemu build).
+4. **Two simultaneous launches deleted each other's metadata dir.** The stale
+   sweep was `rm -rf /tmp/claude-vm-meta.*` and removed the directory a
+   concurrently starting VM had just created (virtiofsd: "does not exist or is
+   not a directory"). Sweep is project-scoped now, and a one-VM-per-project
+   guard was added — the console socket is the liveness probe (a stale socket
+   has no listener), because two VMs for one project would share the
+   store-overlay volume.
+5. **virtiofsd leaked on hard kills.** The launcher `exec`d the runner, which
+   discards its EXIT trap, so killing QEMU left nine daemons per VM running. The
+   runner is a child now, so the trap reaps them.
+6. **`--enter` never worked.** The ttyS1 getty's login session had no foreground
+   process group, so writes to the serial socket were echoed by the tty driver
+   and never executed. Replaced with a systemd-owned interactive shell on that
+   tty.
+7. **tmux ran with the stock config.** The launcher seeded
+   `$state_dir/tmux.conf` but the guest never passed `-f`, so the requested
+   Ctrl-a prefix was not in effect (`tmux show-options -g prefix` → `C-b`). Both
+   invocations pass `-f /mnt/state/tmux.conf` now.
+8. **Chromium died in the guest.** "Failed to create headless user data
+   directory container"; strace showed
+   `mkdir("/home/sandbox/.config/chromium-headless") = EACCES` — systemd creates
+   the mount parents for the git/gh shares as root, so the sandbox user could
+   not create a profile dir. tmpfiles now hands `/home/sandbox/.config` to the
+   sandbox user.
+
+KSM: `mem-merge=on` is set and asserted, but it is inert here *structurally*:
+vhost-user virtiofs needs a shared memfd backend, and the kernel ignores
+`MADV_MERGEABLE` on `MAP_SHARED` mappings (`kSM_madvise` returns early for
+`VM_SHARED|VM_MAYSHARE`). `/proc/<qemu>/smaps` shows no `mg` on the 4 GiB
+mapping, with or without `merge=on` on the backend. A private-RAM VM would be
+mergeable; this one cannot be while its shares are virtiofs. What *is*
+deduplicated is the store — one image per build, sparse per-project deltas.
+
+Also fixed while passing through: `nixosModules.default` now hands the module the
+flake's `microvm` input and overlays via `_module.args`, so the module path
+evaluates guest systems with the same pkgs as the flake (without that it would
+have failed on `pkgs.claude-code`).
+
+Checks: `vm-mounts` (every virtiofs tag in the guest fstab, the store image as
+erofs at `/nix/store`, both volumes ext4, the overlay unit present) and
+`vm-runner` (q35, mem-merge=on, memory-backend-memfd, `8250.nr_uarts=2`,
+`-nographic` present; `pit=off` absent).
+
+Docs/skills: `docs/src/backends/vm.md` rewritten; new skills
+`microvm-nix-cli-vm-integration.md` and `microvm-nix-headless-vm-xvfb.md`
+(replacing `nixos-qemu-vm-headless-display-none.md`); serial-console,
+virtiofs and runtime-path skills updated; README/overview/getting-started
+tables updated; CLAUDE.md backend description and skill index refreshed.
+
+## 2026-09-20 — RAM: KSM measured dead in every direction; balloon verified
+
+Follow-up to the RAM question ("can anything merge these VMs' memory?"). Three
+measurements, one implementation change:
+
+- **Host side, structurally closed.** vhost-user virtiofs requires a shared
+  memfd RAM block, and the kernel ignores `MADV_MERGEABLE` on
+  `VM_SHARED|VM_MAYSHARE` — confirmed by the missing `mg` flag in the 4 GiB
+  block's smaps. The user's own host KSM (run=1, scan-time advisor,
+  30k pages/20 ms) corroborates it: `general_profit` 128 KiB after 1614 full
+  scans — the only big anonymous pools on that box are exactly the ones KSM
+  cannot see. Recommendation given: turn host KSM off there.
+- **Guest side, measured inert.** Built a `hardware.ksm` config, booted a VM,
+  and tested properly: 120 MiB of byte-identical private buffers across three
+  processes → `pages_shared: 0` (KSM only merges pages the process marked with
+  `madvise(MADV_MERGEABLE)`; nothing stock ever does); with marked VMAs
+  registered for minutes → `pages_scanned: 0` (this guest kernel's ksmd never
+  scanned despite `run=1`). Removed the knob — it was a placebo. Docs and the
+  microvm skill corrected to match (my first write-up overclaimed).
+- **Balloon free-page reporting: the real lever, now on.** `microvm.balloon`
+  (`virtio-balloon-pci,free-page-reporting=on,deflate-on-oom=on`, accepted
+  alongside vhost-user-fs — ran the exact arg set). Live measurement: host
+  RAM-block RSS 858 → 2368 MiB while the guest held 1.5 GiB, back to
+  883 MiB within ~20 s of the guest freeing it. Without the balloon those
+  memfd pages are never returned.
+
+Also: bwrap and container backends now default to `omp` (entrypoints), bwrap's
+seeded tmux.conf sets prefix C-a (unbinds C-b); `--tmux` help text updated.
+Verified in the built outputs (omp in both entrypoint paths, C-a seeded).
+`nix build .#vm .#sandbox .#container` + vm checks green. Test VM torn down,
+scratch dirs removed.
+
+## 2026-09-20 (later) — microvm machine type + sandbox-kvm, --enter removed
+
+"Keep microvm, smol" — the VM guest now runs on QEMU's actual `microvm`
+machine type (no display device, no PCI, everything on virtio-mmio; probed >
+24 transports, this guest needs ~15). Launcher follow-ups: mmio device types
+(`vhost-user-fs-device`, `virtio-net-device` for the LAN NIC), `--enter` and
+its second serial removed (one tmux console is enough; the ttyS1 unit,
+`8250.nr_uarts=2`, and the console.sock singleton all went — the singleton now
+probes qmp.sock), and a real `--stop` added (QMP quit over the state dir
+socket; CLAUDE.md documented it but the launcher never had it).
+
+The TCG question took three boots to settle. Upstream machine options
+(acpi=on/pit=off) stall the kernel before userspace under TCG; adding
+pit/pic/rtc (acpi=on) still stalls; acpi=off boots TCG but the machine then
+instantiates only **8 virtio-mmio transports** — the third runtime share dies
+with "A 'virtio-bus' bus was found but is full". So the settled shape is
+upstream defaults + **KVM required**: the launcher fails fast with a clear
+message when /dev/kvm is missing (verified in this TCG sandbox), and a new
+**`sandbox-kvm`** package (bubblewrap `kvm ? true`, `--dev-bind /dev/kvm`)
+passes the device through for nested use. tmux.conf seeding now reseeds
+pre-Ctrl-a seeds in existing projects (both bwrap and VM launchers) instead of
+seed-only-when-missing.
+
+`nix build .#vm .#sandbox .#sandbox-kvm .#container` + vm-mounts/vm-runner
+checks green; vm-runner check now asserts microvm/acpi=on/memfd/
+free-page-reporting/mmio devices and probes the *launcher* script for the
+runtime-injected args (the runner script never contained them — first check
+run failed on that). Docs updated: README/vm.md/overview/introduction (KVM
+required), getting-started (--enter → --stop), architecture flag list, both
+microvm skills, serial-console skill status note. Untested here: an actual KVM
+boot (this sandbox has no /dev/kvm — that is what sandbox-kvm is for); first
+KVM boot on the host is the remaining verification.

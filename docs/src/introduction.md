@@ -10,7 +10,7 @@ Claude Code (from [sadjow/claude-code-nix](https://github.com/sadjow/claude-code
 |---|---|---|
 | [Bubblewrap](https://github.com/containers/bubblewrap) | User namespaces, shared kernel | Unprivileged |
 | [systemd-nspawn](https://www.freedesktop.org/software/systemd/man/latest/systemd-nspawn.html) | Full namespace isolation | Root (sudo) |
-| QEMU VM | Separate kernel, hardware virtualization | KVM recommended |
+| [microvm.nix](https://github.com/microvm-nix/microvm.nix) VM | Separate kernel, hardware virtualization | KVM required |
 
 A remote sandbox manager is also provided: a Rust/Axum daemon with a web dashboard and CLI for managing sandboxes on a server over SSH.
 
@@ -26,7 +26,7 @@ A remote sandbox manager is also provided: a Rust/Axum daemon with a web dashboa
 - **Chromium from nixpkgs** — always `pkgs.chromium` inside the sandbox
 - **Git/SSH forwarding** — push/pull works inside all backends
 - **Nix commands** — `NIX_REMOTE=daemon` forwarding so `nix build` works inside sandboxes
-- **Display forwarding** — X11, Wayland, GPU acceleration (bubblewrap/container) or QEMU window (VM)
+- **Display** — X11, Wayland, GPU acceleration (bubblewrap/container); a headless Xvfb display inside the guest, driven through tmux (VM)
 - **Audio forwarding** — PipeWire/PulseAudio (bubblewrap/container)
 - **D-Bus session bus proxy** — filtered via `xdg-dbus-proxy` (keyring/Secret Service only, blocks Chromium singleton collisions)
 - **Remote management** — web dashboard with live screenshots, real-time log streaming via WebSocket, metrics, and a CLI over SSH
@@ -44,7 +44,7 @@ nix run github:jhhuh/claude-code-nix-sandbox#sandbox -- /path/to/project
 nix build github:jhhuh/claude-code-nix-sandbox#container
 sudo ./result/bin/claude-sandbox-container /path/to/project
 
-# QEMU VM (strongest isolation)
+# microvm.nix VM (strongest isolation)
 nix build github:jhhuh/claude-code-nix-sandbox#vm
 ./result/bin/claude-sandbox-vm /path/to/project
 ```

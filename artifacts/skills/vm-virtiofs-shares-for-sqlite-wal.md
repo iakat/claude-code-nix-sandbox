@@ -30,44 +30,62 @@ corrupts silently (categorically: cross-host shm is impossible; rollback
 journal modes are only conditionally safe and depend on working byte-range
 locks). virtiofs is the strongest fs-level answer for VMs on one host.
 
-## Wiring (`nix/backends/vm.nix`)
+## Wiring (`nix/backends/vm.nix`, microvm.nix backend)
 
-Guest:
-- `virtualisation.fileSystems."<mount>"` entries with `fsType = "virtiofs"`
-  and `device = <tag>`. NEVER plain `fileSystems` — qemu-vm.nix
-  mkVMOverride silently drops it (see
-  `vm-9p-runtime-path-fixup-for-session-continuity.md`).
-- `boot.kernelModules = [ "virtio_fs" ];`
+The backend splits shares by **when their source becomes known**, which is
+what decides the mechanism:
 
-Host (launcher):
-- One `virtiofsd --socket-path <state-dir>/virtiofsd-<tag>.sock
-  --shared-dir <dir> [--readonly | --writeback]` per share. Sockets live in
-  the per-project state dir so concurrent VMs never collide. The socket
-  appearing is the readiness check; the daemon log sits next to it and is
-  printed on failure.
-- Per share: `-chardev socket,id=charvfs_<tag>,path=<sock> -device
-  vhost-user-fs-pci,chardev=charvfs_<tag>,tag=<tag>`.
-- NOTHING else: the generated run script (qemu-vm.nix) already provides the
-  shared guest RAM that vhost-user requires
-  (`-object memory-backend-memfd,id=mem0,size=<memorySize>M,share=on
-  -machine memory-backend=mem0`) and its own virtiofsd daemons for
-  nix-store/xchg/shared. Do NOT add a second `-machine memory-backend=`.
-- The EXIT trap kills the daemons (they only self-exit after QEMU
-  disconnects; on launcher failure they must not leak).
+- **Build-time source** — the host store (`builtins.storeDir`). Declared as a
+  `microvm.shares` entry, so microvm.nix generates the guest mount *and* the
+  QEMU device, and (because `writableStoreOverlay` is set) the overlay wiring
+  for `/nix/store`. Its source is read from a store-path file by microvm.nix's
+  own daemon tooling, so it cannot be a runtime value.
+- **Launch-time source** — the project directory, the user's home
+  directories, and the per-launch metadata dir. These get their guest mount
+  from a plain `fileSystems."<mount>"` entry with `fsType = "virtiofs"` and
+  `device = <tag>`, and their QEMU side from the launcher, which passes
+  `-chardev socket` + `-device vhost-user-fs-pci` through
+  `microvm.extraArgsScript` (the supported runtime hook — `microvm.shares` is
+  evaluated at build time and cannot express them).
+
+Host side (launcher):
+
+- One `virtiofsd --socket-path <sock> --shared-dir <dir> [--readonly |
+  --writeback]` per share, started *before* `microvm-run`.
+- Runtime-share sockets live in the per-launch `mktemp -d` metadata dir: a
+  unix socket path must be shorter than `SUN_LEN` (108), and the state dir
+  nests arbitrarily deep. The EXIT trap kills the daemons and removes them.
+- The `ro-store` socket must sit at exactly the path declared in
+  `microvm.shares` (`virtiofsd-ro-store.sock`, relative), because microvm.nix
+  emits that path and the runner is started from the state dir (it resolves
+  relative to the runner's cwd). Do not put it in the metadata dir.
+- Nothing else: microvm.nix already provides the shared guest RAM that
+  vhost-user requires (`-object memory-backend-memfd,id=mem,size=...M,share=on
+  -numa node,memdev=mem`) *because* a share is declared. Adding a second
+  `-object memory-backend-memfd` would collide on the id.
+- `start_vfsd` waits for the socket to appear and dumps
+  `$state_dir/virtiofsd-<tag>.log` on failure, so a dead daemon surfaces as
+  its own error instead of a cryptic QEMU chardev error.
 
 ## Gotchas
 
-- Read-only shares are enforced twice: `--readonly` on the daemon (host
-  side, like 9p's `readonly=on`) and `ro` in the guest mount options.
+- **`extraArgsScript` output is word-split**, never evaluated: no quoting can
+  survive in it, so every path passed that way must be space-free. Paths under
+  `/tmp` (the metadata dir) and the state dir qualify — `stateDirSnippet`
+  mangles whitespace out of the project name, and `XDG_STATE_HOME`/`$HOME`
+  would have to contain spaces to break it.
+- Read-only shares are enforced twice: `--readonly` on the daemon (host side,
+  like 9p's `readonly=on`) and `ro` in the guest mount options.
 - virtiofsd exports directories only — single files (`~/.gitconfig`,
   `~/.omp/agent/config.yml`) still ride the meta dir / host-side seeding.
 - Ownership passes through (no id mapping): host uid 1000 ↔ guest `sandbox`
   uid 1000 line up; keep it that way.
-- virtiofsd's default sandbox is `namespace` (unprivileged user
-  namespaces; NixOS allows by default). The upstream store daemons use
-  `--sandbox=none` because they export `/nix/store`; ours keep the default.
-- If a host disables unprivileged user namespaces, virtiofsd fails to
-  start; the launcher surfaces `virtiofsd-<tag>.log`.
+- virtiofsd's default sandbox is `namespace` (unprivileged user namespaces;
+  NixOS allows by default). Upstream store-daemon setups use `--sandbox=none`
+  because they export `/nix/store`; ours keeps the default and works, because
+  the directory itself is world-readable.
+- If a host disables unprivileged user namespaces, virtiofsd fails to start;
+  the launcher surfaces `virtiofsd-<tag>.log`.
 - Escape hatch if a deployment wants per-VM omp isolation instead of a
   shared DB: `PI_CONFIG_DIR` / `PI_CODING_AGENT_DIR` (omp `dirs.ts`) point
   omp's state at VM-local storage, or `omp auth-broker` centralizes
@@ -77,4 +95,6 @@ Host (launcher):
 
 - `nix/backends/vm.nix` — implementation
 - `nix/sandbox-spec.nix` — `ompConfigSnippet` (host-side config seed)
+- `artifacts/skills/microvm-nix-cli-vm-integration.md` — the rest of the
+  microvm.nix integration (volumes, runtime args, store overlay)
 - https://github.com/can1357/oh-my-pi/issues/9082

@@ -9,7 +9,7 @@ nix/chromium.nix       # Chromium wrapper with extension policy
 nix/backends/
   bubblewrap.nix       # bwrap sandbox — unprivileged, user namespaces
   container.nix        # systemd-nspawn container — requires root
-  vm.nix               # QEMU VM — separate kernel, hardware virtualization
+  vm.nix               # microvm.nix VM — separate kernel, hardware virtualization
 nix/modules/
   sandbox.nix          # NixOS module for declarative sandbox configuration
   manager.nix          # NixOS module for the manager systemd service
@@ -50,9 +50,9 @@ Each backend follows the same structure:
 2. **Import spec** — `spec = import ../sandbox-spec.nix { inherit pkgs; }` for packages and /etc paths
 3. **Build a PATH or system closure** — `symlinkJoin` with `spec.packages` (bubblewrap) or `nixosSystem` with `spec.packages` in `environment.systemPackages` (container/VM)
 4. **Generate a shell script** via `writeShellApplication` that:
-   - Parses `--shell`, `--gh-token` (and `--headless` for the VM) flags and project directory argument
+   - Parses the backend's flags (`--shell`, `--gh-token`, and for the VM `--stop`) and the project directory argument
    - Conditionally builds arrays of flags for display, D-Bus, GPU, audio, auth, git, SSH, network
-   - Execs the sandbox runtime (`bwrap`, `systemd-nspawn`, or QEMU VM script)
+   - Execs the sandbox runtime (`bwrap`, `systemd-nspawn`, or microvm.nix's generated runner)
 
 ## Manager architecture
 

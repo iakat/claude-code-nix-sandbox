@@ -1,27 +1,28 @@
-# VM 9p: Runtime Path Fixup for Session Continuity
+# VM runtime path fixup for session continuity
 
-## Read this first: use `virtualisation.fileSystems`, never `fileSystems`
+## Read this first: `fileSystems` is fine with microvm.nix
 
-For a VM built on `qemu-vm.nix`, guest mounts **must** be declared as
-`virtualisation.fileSystems."/path"`. `qemu-vm.nix` replaces the entire
-`fileSystems` attrset via `mkVMOverride`, so plain `fileSystems` entries are
-**silently discarded** — no evaluation error, no warning, they simply never
-reach the guest fstab.
+This backend used to run on nixpkgs' `qemu-vm.nix`, where guest mounts **had**
+to be declared as `virtualisation.fileSystems`: `qemu-vm.nix` replaced the whole
+`fileSystems` attrset via `mkVMOverride`, so plain `fileSystems` entries were
+silently discarded — no error, no warning, nothing in the guest fstab. That is
+historical now: the backend builds on microvm.nix, whose guest modules do not
+touch `fileSystems`, so the runtime shares are declared there directly (and
+`checks.vm-mounts` still asserts every tag reaches the generated fstab).
 
-This backend had all seven 9p shares declared the wrong way, so nothing
-mounted in the guest: not the project dir, not `~/.claude`, not `/mnt/meta`
-(which carries the entrypoint). The VM was non-functional rather than
-degraded, and it went unnoticed because `.#vm` could not evaluate at all.
+The rest of this file is unchanged: the problem it solves is that
+Claude/omp session state is keyed by the *project's absolute path*, and that
+path can only be known at launch.
 
-How to check without booting — inspect the built system's fstab:
+How to check without booting (works for both backends — inspect the built
+system's fstab):
 
 ```bash
-SYS=$(nix-store -qR result-vm | rg 'nixos-system' | head -1)
-rg -N -o '^[a-z_]+ [^ ]+ 9p' "$SYS/etc/fstab"
+SYS=$(nix-store -qR result-vm | grep nixos-system | head -1)
+grep -N -o '^[a-z_]+ [^ ]* [a-z]*' "$SYS/etc/fstab"
 ```
 
-If your share is not listed there, it will not mount. Only nixpkgs' own
-`nix-store`, `shared` and `xchg` appear when the declarations are wrong.
+If your share is not listed there, it will not mount.
 
 ## Problem
 

@@ -6,7 +6,7 @@
 
 Launch sandboxed [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code) sessions with Chromium using Nix.
 
-Claude Code (from [sadjow/claude-code-nix](https://github.com/sadjow/claude-code-nix)) runs inside an isolated sandbox with filesystem isolation, display forwarding, and a Chromium browser. Three backends available with increasing isolation: [bubblewrap](https://github.com/containers/bubblewrap) (unprivileged), [systemd-nspawn](https://www.freedesktop.org/software/systemd/man/latest/systemd-nspawn.html) (root), and QEMU VM (strongest).
+Claude Code (from [sadjow/claude-code-nix](https://github.com/sadjow/claude-code-nix)) runs inside an isolated sandbox with filesystem isolation, display forwarding, and a Chromium browser. Three backends available with increasing isolation: [bubblewrap](https://github.com/containers/bubblewrap) (unprivileged), [systemd-nspawn](https://www.freedesktop.org/software/systemd/man/latest/systemd-nspawn.html) (root), and a [microvm.nix](https://github.com/microvm-nix/microvm.nix) VM (strongest).
 
 ## Web Dashboard
 
@@ -54,18 +54,21 @@ sudo ./result/bin/claude-sandbox-container /path/to/project
 sudo ./result/bin/claude-sandbox-container --shell /path/to/project
 ```
 
-### QEMU VM (strongest isolation)
+### microvm.nix VM (strongest isolation)
 
 ```bash
 # Build the VM package
 nix build github:jhhuh/claude-code-nix-sandbox#vm
 
-# Run Claude Code in a VM (serial console in terminal, Chromium in QEMU window)
+# Run omp in a VM: tmux on the serial console in your terminal (prefix Ctrl-a),
+# Chromium headless inside the guest (no host window)
 ./result/bin/claude-sandbox-vm /path/to/project
 
-# Shell mode
+# Shell mode (tmux + bash)
 ./result/bin/claude-sandbox-vm --shell /path/to/project
 ```
+
+The guest is a NixOS system built with [microvm.nix](https://github.com/microvm-nix/microvm.nix) on QEMU, on the `microvm` machine type (no display device, no PCI — every device rides virtio-mmio). **KVM (`/dev/kvm`) is required**; to run it from inside a sandbox, use the `sandbox-kvm` package, which binds the device through. The host `/nix/store` is shared read-only and overlaid with a per-project writable layer, so no per-VM copy of the base image is written — only the delta. Every VM started from the same state root shares a private LAN and can reach the others.
 
 Requires `ANTHROPIC_API_KEY` in your environment, or an existing `~/.claude` login (auto-mounted).
 
@@ -78,12 +81,12 @@ Git push/pull works inside all sandboxes — `~/.gitconfig`, `~/.config/git/`, `
 | Project directory | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
 | `~/.claude` | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
 | `~/.gitconfig`, `~/.ssh` | Read-only (bind-mount) | Read-only (bind-mount) | Read-only (virtiofs) |
-| `/nix/store` | Read-only | Read-only | Shared from host |
+| `/nix/store` | Read-only | Read-only | Host store + writable overlay |
 | `/home` | Isolated (tmpfs) | Isolated | Separate filesystem |
-| Network | Shared by default | Shared by default | NAT by default |
-| Display | Host X11/Wayland | Host X11/Wayland | QEMU window (Xorg) |
+| Network | Shared by default | Shared by default | NAT + sandbox LAN |
+| Display | Host X11/Wayland | Host X11/Wayland | Headless (Xvfb in the VM) |
 | Audio | PipeWire/PulseAudio | PipeWire/PulseAudio | Isolated |
-| GPU (DRI) | Forwarded | Forwarded | Virtio VGA |
+| GPU (DRI) | Forwarded | Forwarded | None (software rendering) |
 | D-Bus | Forwarded | Forwarded | Isolated |
 | SSH agent | Forwarded | Forwarded | Isolated |
 | Nix commands | Via daemon | Via daemon | Local store |
@@ -99,8 +102,9 @@ Git push/pull works inside all sandboxes — `~/.gitconfig`, `~/.config/git/`, `
 | `no-network` | Bubblewrap sandbox (no network) | User namespaces |
 | `container` | systemd-nspawn (network) | root (sudo) |
 | `container-no-network` | systemd-nspawn (isolated) | root (sudo) |
-| `vm` | QEMU VM (NAT) | KVM recommended |
-| `vm-no-network` | QEMU VM (isolated) | KVM recommended |
+| `sandbox-kvm` | bubblewrap sandbox with `/dev/kvm` (run the VM inside it) | — |
+| `vm` | microvm.nix VM (NAT + sandbox LAN) | KVM required |
+| `vm-no-network` | microvm.nix VM (no NAT; sandbox LAN only) | KVM required |
 | `manager` | Remote sandbox manager daemon | — |
 | `cli` | `claude-remote` CLI | SSH access to server |
 
@@ -279,4 +283,4 @@ packages.container = pkgs.callPackage ./nix/backends/container.nix {
 - NixOS or Nix with flakes enabled
 - Linux (bubblewrap requires user namespaces)
 - X11 or Wayland display server (bubblewrap/container)
-- KVM recommended for VM backend (`/dev/kvm`)
+- `/dev/kvm` (VM backend — required; `sandbox-kvm` passes it into a sandbox)

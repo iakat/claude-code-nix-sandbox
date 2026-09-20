@@ -403,7 +403,7 @@ writeShellApplication {
     if [[ "$shell_mode" == true ]]; then
       entrypoint_args=(--setenv=ENTRYPOINT=bash)
     else
-      entrypoint_args=(--setenv=ENTRYPOINT="$(printf '%q ' claude --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")")
+      entrypoint_args=(--setenv=ENTRYPOINT="$(printf '%q ' omp --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")")
     fi
     entrypoint_args+=(--setenv=CLAUDE_SANDBOX=1 --setenv=CLAUDE_SANDBOX_BACKEND=container)
     # Use pipe console when stdin is not a terminal (e.g. piped commands, --version)

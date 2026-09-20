@@ -18,6 +18,9 @@
   nix-ld,
   # Toggle host network access (set false to --unshare-net)
   network ? true,
+  # Bind /dev/kvm into the sandbox (nested virt: lets the VM backend's QEMU
+  # use KVM from inside this sandbox instead of stalling under TCG)
+  kvm ? false,
   # Additional packages available inside the sandbox
   extraPackages ? [ ],
 }:
@@ -56,7 +59,7 @@ writeShellApplication {
       echo "  it rather than creating a second, isolated namespace." >&2
       echo "" >&2
       echo "  --shell     Drop into bash instead of launching claude" >&2
-      echo "  --tmux      Run claude inside a tmux session (needed for agent teams)" >&2
+      echo "  --tmux      Run the agent inside a tmux session (prefix Ctrl-a; needed for agent teams)" >&2
       echo "  --gh-token  Forward GH_TOKEN/GITHUB_TOKEN env vars into sandbox" >&2
       echo "  --enter     Open a shell INSIDE this project's running sandbox," >&2
       echo "              to inspect it live; fails if none is running" >&2
@@ -201,6 +204,18 @@ writeShellApplication {
       dri_args+=(--dev-bind /dev/dri /dev/dri)
     fi
 
+    # Nested virt: pass the host KVM device through so a VM started inside
+    # this sandbox runs on KVM. Guarded on the node existing — on hosts
+    # without KVM this variant behaves exactly like the plain sandbox.
+    kvm_args=()
+    ${lib.optionalString kvm ''
+      if [[ -c /dev/kvm ]]; then
+        kvm_args+=(--dev-bind /dev/kvm /dev/kvm)
+      else
+        echo "warning: /dev/kvm not present on this host; VMs will fall back to TCG" >&2
+      fi
+    ''}
+
     # OpenGL/Vulkan driver forwarding (NixOS puts drivers in /run/opengl-driver)
     gpu_args=()
     if [[ -d /run/opengl-driver ]]; then
@@ -305,9 +320,15 @@ writeShellApplication {
     tmux_sock="$state_dir/tmux.sock"
     project_name="$(basename "$project_dir")"
     tmux_session="sandbox:$project_name"
-    if [[ ! -f "$tmux_conf" ]]; then
+    # Seeded when missing, and reseeded over a pre-Ctrl-a seed (older
+    # projects), so existing sandboxes pick up the prefix without clobbering
+    # a config that already has it.
+    if [[ ! -f "$tmux_conf" ]] || ! grep -q "set -g prefix C-a" "$tmux_conf"; then
       cat > "$tmux_conf" << 'TMUXCONF'
 # Sandbox tmux config — edit freely, persists across sandbox restarts
+set -g prefix C-a
+bind C-a send-prefix
+unbind C-b
 set -g mouse on
 set -g default-terminal "tmux-256color"
 set -g status-left "[#S] "
@@ -377,9 +398,9 @@ TMUXCONF
     if [[ "$shell_mode" == true ]]; then
       entrypoint=(bash)
     elif [[ "$tmux_mode" == true ]]; then
-      entrypoint=(tmux -S "$tmux_sock" -f "$tmux_conf" new-session -s "$tmux_session" -- claude --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")
+      entrypoint=(tmux -S "$tmux_sock" -f "$tmux_conf" new-session -s "$tmux_session" -- omp --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")
     else
-      entrypoint=(claude --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")
+      entrypoint=(omp --append-system-prompt "$sandbox_notice" "''${claude_args[@]}")
     fi
 
     # Join an existing sandbox rather than creating a second namespace.
@@ -433,6 +454,7 @@ TMUXCONF
       --dev /dev \
       --dev-bind /dev/shm /dev/shm \
       "''${dri_args[@]}" \
+      "''${kvm_args[@]}" \
       --ro-bind /nix/store /nix/store \
       --ro-bind-try /nix/var/nix/db /nix/var/nix/db \
       --bind-try /nix/var/nix/daemon-socket /nix/var/nix/daemon-socket \

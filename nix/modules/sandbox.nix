@@ -7,7 +7,7 @@
 #       { services.claude-sandbox.enable = true; }
 #     ];
 #   };
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, claudeSandbox, ... }:
 
 let
   cfg = config.services.claude-sandbox;
@@ -18,8 +18,17 @@ let
     chromeExtensionIds = spec.chromeExtensionIds;
   };
 
+  # Guest systems (container, VM) are evaluated here, so the overlays that
+  # provide claude-code and omp must be injected into every evaluation — they
+  # are not part of the host's pkgs. Both arrive from the flake through
+  # `claudeSandbox` (see nixosModules.default in flake.nix).
   nixos = args: import "${pkgs.path}/nixos/lib/eval-config.nix" {
-    modules = args.imports;
+    modules = [
+      {
+        nixpkgs.overlays = claudeSandbox.overlays;
+        nixpkgs.config.allowUnfree = true;
+      }
+    ] ++ args.imports;
     system = pkgs.stdenv.hostPlatform.system;
   };
 in
@@ -89,6 +98,7 @@ in
       ++ lib.optional cfg.vm.enable
         (pkgs.callPackage ../../nix/backends/vm.nix {
           inherit nixos;
+          microvm = claudeSandbox.microvm;
           inherit (cfg) network;
           inherit (cfg.vm) extraModules;
         });
