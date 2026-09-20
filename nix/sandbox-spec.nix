@@ -5,6 +5,19 @@
 # directly by backends. Complex mechanisms (dotfile mounts, sockets, env vars)
 # stay as backend-specific code — see the documented checklist below.
 { pkgs }:
+let
+  # omp ("oh my pi", github:can1357/oh-my-pi) agent settings, seeded host-side
+  # into ~/.omp/agent/config.yml ONLY when that file is missing. omp takes an
+  # advisory lock on the file and rewrites it atomically at runtime (/settings
+  # changes, onboarding), and its lock backend may drop an flock sidecar next
+  # to it — so it must stay a writable regular file inside a writable
+  # directory, never a store symlink or a read-only share. Upstream's home
+  # manager module copies it into place for exactly this reason; we seed the
+  # same way (see ompConfigSnippet) and share the whole ~/.omp directory rw.
+  # formats.yaml matches upstream's own generator.
+  ompSettings = { startup.quiet = true; };  # skip the startup banner
+  ompConfigFile = (pkgs.formats.yaml { }).generate "omp-config.yml" ompSettings;
+in
 {
   # --- PROGRAMMATIC: consumed directly by backends ---
 
@@ -13,6 +26,10 @@
   # container/VM use stock chromium. Each backend adds it separately.
   packages = with pkgs; [
     claude-code
+    omp  # "oh my pi" (github:can1357/oh-my-pi) — a terminal AI coding agent,
+         # an alternative to claude-code. PATH-only: no launcher integration,
+         # run it from a shell inside the sandbox. Config + auth persist via
+         # the shared host ~/.omp (see ompConfigSnippet and the checklist).
     git
     gh
     openssh
@@ -232,6 +249,29 @@
     fi
   '';
 
+  # Host-side omp prep: guarantee ~/.omp/agent/config.yml exists as a writable
+  # regular file BEFORE the sandbox starts, so the whole ~/.omp directory can
+  # be shared rw (bind / 9p) and omp never sees a first-run without config.
+  # Host-side in every backend, including the VM: 9p exports the host
+  # directory wholesale, so the file must exist on the host before QEMU
+  # starts — one code path for all three backends.
+  #
+  # Seeds ONLY when missing: after first launch omp owns the file and its
+  # runtime rewrites (see the ompSettings comment) must win over the declared
+  # settings.
+  #
+  # Uses $HOME unless $omp_home is set. The container backend must set it: it
+  # runs under sudo, where $HOME is root's. That backend is also responsible
+  # for chown-ing what this creates back to the real uid/gid — same contract
+  # as stateDirSnippet.
+  ompConfigSnippet = ''
+    omp_root="''${omp_home:-$HOME}/.omp"
+    mkdir -p "$omp_root/agent"
+    if [[ ! -e "$omp_root/agent/config.yml" ]]; then
+      install -m 600 ${ompConfigFile} "$omp_root/agent/config.yml"
+    fi
+  '';
+
   # Host /etc paths forwarded into the sandbox (read-only).
   # Bubblewrap: --ro-bind-try per path
   # Container: for-loop --bind-ro per path
@@ -270,6 +310,14 @@
   #                                  the oauthAccount/onboarding state — without the
   #                                  seed every sandbox prompts for login. Sandbox
   #                                  writes stay local, never touch the host file.
+  #   ~/.omp                      — omp agent config + auth (rw bind / 9p, unlike
+  #                                  the ro shares above: omp rewrites its config
+  #                                  at runtime). agent/config.yml is seeded
+  #                                  host-side ONLY when missing — it must stay a
+  #                                  writable regular file in a writable dir
+  #                                  (omp flock-locks and atomically rewrites
+  #                                  it), never a store symlink or ro share.
+  #                                  See ompConfigSnippet.
   #   ~/.gitconfig, ~/.config/git  — git config (ro-bind / 9p)
   #   ~/.ssh                       — SSH keys (ro-bind / 9p)
   #   ~/.config/gh                 — GitHub CLI config (ro-bind / 9p)

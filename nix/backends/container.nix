@@ -336,6 +336,18 @@ writeShellApplication {
       chmod 600 "$container_root$real_home/.claude.json"
     fi
 
+    # omp ("oh my pi") config + auth persistence — mirror of the ~/.claude
+    # bind above, seeded host-side. We run under sudo ($HOME is root's), so
+    # point the snippet at the real home and chown back what it created —
+    # the same contract as the state dir snippet above.
+    omp_args=()
+    omp_home="$real_home"
+    ${spec.ompConfigSnippet}
+    chown "$real_uid:$real_gid" \
+      "$real_home/.omp" "$real_home/.omp/agent" \
+      "$real_home/.omp/agent/config.yml" 2>/dev/null || true
+    omp_args+=(--bind="$real_home/.omp":"$real_home/.omp")
+
     # Per-project Chromium profile with unique user-data-dir path.
     # See bubblewrap.nix comment for why the real project path is needed.
     chromium_profile="$state_dir/chromium"
@@ -452,6 +464,7 @@ writeShellApplication {
       "''${audio_args[@]}" \
       "''${keyring_args[@]}" \
       "''${claude_auth_args[@]}" \
+      "''${omp_args[@]}" \
       "''${git_args[@]}" \
       "''${gh_args[@]}" \
       "''${ssh_agent_args[@]}" \

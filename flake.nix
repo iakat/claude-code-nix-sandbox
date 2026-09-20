@@ -5,9 +5,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     claude-code-nix.url = "github:sadjow/claude-code-nix";
     claude-code-nix.inputs.nixpkgs.follows = "nixpkgs";
+    omp.url = "github:can1357/oh-my-pi";
+    omp.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix }:
+  outputs = { self, nixpkgs, claude-code-nix, omp }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -20,7 +22,7 @@
       pkgsFor = system: import nixpkgs {
         inherit system;
         config.allowUnfree = true;
-        overlays = [ claude-code-nix.overlays.default sandboxOverlay ];
+        overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ];
       };
     in
     {
@@ -47,7 +49,7 @@
           container = pkgs.callPackage ./nix/backends/container.nix {
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
             });
           };
 
@@ -55,7 +57,7 @@
             network = false;
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
             });
           };
 
@@ -63,7 +65,7 @@
           vm = pkgs.callPackage ./nix/backends/vm.nix {
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
             });
           };
 
@@ -71,7 +73,7 @@
             network = false;
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
             });
           };
 
@@ -131,7 +133,7 @@
           vm-mounts = pkgs.runCommand "vm-mounts-check" { } ''
             fstab=${self.packages.${system}.vm.vmSystem}/etc/fstab
             missing=""
-            for tag in project_share claude_auth git_config git_config_dir \
+            for tag in project_share claude_auth omp_auth git_config_dir \
                        gh_config_dir ssh_dir claude_meta state_dir; do
               grep -qE "^$tag " "$fstab" || missing="$missing $tag"
             done

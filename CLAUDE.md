@@ -95,6 +95,7 @@ claude-remote ui                          # SSH tunnel for web dashboard
 - **Spec-driven**: `nix/sandbox-spec.nix` is the single source of truth for packages, extension IDs, and /etc paths. Backends import it and implement delivery. Chromium is excluded from spec because bwrap uses `chromiumSandbox` wrapper while container/VM use stock `chromium`
 - **Chromium from nixpkgs**: always `pkgs.chromium` inside the sandbox
 - **claude-code from `sadjow/claude-code-nix`**: flake input with overlay applied to `pkgsFor` and all `nixosSystem` calls; backends reference `pkgs.claude-code` which resolves through the overlay
+- **omp from `can1357/oh-my-pi`**: same overlay treatment as claude-code; ships in every sandbox via `spec.packages` (PATH-only, no launcher integration). Host `~/.omp` is shared rw in all backends; `agent/config.yml` is seeded host-side by copy when missing — omp flock-locks and rewrites it at runtime, so it must never be a store symlink or ro share
 - **Backends are callPackage-able**: called via `pkgs.callPackage` in flake.nix; `pkgs` param is auto-filled and used to evaluate the spec
 - **NixOS modules**: `sandbox.nix` as `nixosModules.default`, `manager.nix` as `nixosModules.manager`
 - **Manager is Rust/Axum**: axum 0.7, askama 0.12, tower-http 0.5, sysinfo for metrics

@@ -72,6 +72,20 @@ let
           noCheck = true;
         };
 
+        # omp ("oh my pi") agent config + auth via 9p — read-WRITE, unlike the
+        # git/gh/ssh shares below: omp rewrites ~/.omp/agent/config.yml at
+        # runtime under an advisory lock, so a ro share would break every
+        # launch. The launcher seeds that file host-side before QEMU starts
+        # (9p exports the host directory wholesale; a single file inside it
+        # cannot be shared on its own — the same reason .gitconfig rides the
+        # meta dir). Mirrors claude_auth: nofail covers a skipped virtfs.
+        virtualisation.fileSystems."/home/sandbox/.omp" = {
+          device = "omp_auth";
+          fsType = "9p";
+          options = [ "trans=virtio" "version=9p2000.L" "nofail" ];
+          noCheck = true;
+        };
+
         # Git per-directory config via 9p (nofail: may not exist on host).
         # ~/.gitconfig is a FILE, not a directory, and 9p local driver can only
         # export directories — so that file is seeded by copy through the meta
@@ -155,7 +169,8 @@ let
               sudo mkdir -p "$host_home"
               sudo chown sandbox:users "$host_home"
               # Symlink dotfiles from fixed 9p mount to real home path
-              for item in .claude .config .ssh; do
+              # (.omp included: omp's config + auth live there)
+              for item in .claude .omp .config .ssh; do
                 if [[ -e "/home/sandbox/$item" ]]; then
                   ln -sfn "/home/sandbox/$item" "$host_home/$item"
                 fi
@@ -411,6 +426,13 @@ writeShellApplication {
     if [[ -d "$host_claude_dir" ]]; then
       qemu_extra+=(-virtfs "local,path=$host_claude_dir,mount_tag=claude_auth,security_model=none,id=claude_auth")
     fi
+
+    # omp ("oh my pi"): seed host ~/.omp/agent/config.yml when missing, then
+    # share the directory rw (omp rewrites its config at runtime). Unconditional
+    # — unlike the -d-guarded claude_auth above — because the seed guarantees
+    # the directory exists before the export.
+    ${spec.ompConfigSnippet}
+    qemu_extra+=(-virtfs "local,path=$HOME/.omp,mount_tag=omp_auth,security_model=none,id=omp_auth")
 
     if [[ -f "$HOME/.gitconfig" ]]; then
       cp "$HOME/.gitconfig" "$meta_dir/gitconfig"

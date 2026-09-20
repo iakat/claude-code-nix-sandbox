@@ -254,6 +254,15 @@ writeShellApplication {
       claude_auth_args+=(--perms 0600 --file 11 "$sandbox_home/.claude.json")
     fi
 
+    # omp ("oh my pi") config + auth persistence. Same shape as the ~/.claude
+    # bind above: whole directory, rw. The snippet guarantees the host dir
+    # (and agent/config.yml inside it) exists before the bind, so no --bind-try
+    # and no fd/--file trick — that exists only because ~/.claude.json is a
+    # single file racing atomic renames on the host; ~/.omp is a directory.
+    omp_args=()
+    ${spec.ompConfigSnippet}
+    omp_args+=(--bind "$HOME/.omp" "$sandbox_home/.omp")
+
     # Per-project Chromium profile, keyed on a path unique to this project so
     # concurrent sandboxes get distinct instances. Lives in the state dir, not
     # the project dir — a browser profile inside a repo is untracked junk at
@@ -437,6 +446,7 @@ TMUXCONF
       --dir "$sandbox_home" \
       --dir "$sandbox_home/.config" \
       "''${claude_auth_args[@]}" \
+      "''${omp_args[@]}" \
       "''${git_args[@]}" \
       "''${gh_args[@]}" \
       --bind "$project_dir" "$project_dir" \
