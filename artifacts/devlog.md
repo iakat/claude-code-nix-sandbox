@@ -542,3 +542,30 @@ two rival answers to "what is running", and they are semantically
 incompatible — the manager assumes it spawned a fresh instance while
 `claude-sandbox <dir>` now joins the project's existing one. That contradiction
 was introduced this session by the singleton change and is unresolved.
+
+## 2026-09-20 — VM shares: 9p → virtiofs for SQLite WAL
+
+omp would not start in the VM: `SQLITE_IOERR_SHMMAP` opening
+`~/.omp/agent/agent.db`. Root cause: every omp DB is WAL-mode SQLite, WAL's
+wal-index is a shared mmap of the `-shm` file, and 9p cannot mmap shared
+files (cross-host WAL is categorically unsupported; see omp#9082).
+
+Swapped all VM shares to virtiofs: guest fstab entries become
+`fsType = "virtiofs"` (tags unchanged, still `virtualisation.fileSystems` —
+mkVMOverride), and the launcher spawns one virtiofsd per share with sockets
+in the per-launch meta dir (state-dir paths overflow sockaddr_un's 108
+chars — first boot attempt failed exactly there). Each daemon attaches as
+`vhost-user-fs-pci`; no memfd work needed because the generated run script
+already provides `-object memory-backend-memfd,id=mem0,share=on -machine
+memory-backend=mem0` and runs its own daemons for nix-store/xchg/shared —
+my initial duplicate backend would have double-set `memory-backend=`.
+rw shares get `--writeback`, ro shares `--readonly` + guest `ro`.
+
+Runtime-verified under nested TCG (no /dev/kvm here): both VMs booted, all
+shares mounted; sqlite WAL probe on a scratch DB inside the virtiofs
+`~/.omp` mount passed (`journal_mode=wal`, insert/select through the mmap'd
+shm, clean close checkpointed -wal/-shm away) — the exact operation that
+died under 9p. Multi-VM: two VMs sharing the host `~/.omp` ran three
+concurrent `BEGIN IMMEDIATE` writer processes (20 txns each) through their
+own virtiofsd daemons: 60/60 rows, `integrity_check ok` from both guests.
+`vm-mounts` check now asserts `virtiofs` fstab lines.

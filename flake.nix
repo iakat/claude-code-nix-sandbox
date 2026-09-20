@@ -121,7 +121,8 @@
         self.packages.${system} // {
           manager-test = pkgs.testers.nixosTest (import ./tests/manager.nix { inherit self; });
 
-          # Assert every 9p share reaches the guest fstab.
+          # Assert every virtiofs share reaches the guest fstab as a virtiofs
+          # mount.
           #
           # Building .#vm cannot catch this. qemu-vm.nix replaces the whole
           # fileSystems attrset via mkVMOverride, so a share declared with
@@ -135,11 +136,11 @@
             missing=""
             for tag in project_share claude_auth omp_auth git_config_dir \
                        gh_config_dir ssh_dir claude_meta state_dir; do
-              grep -qE "^$tag " "$fstab" || missing="$missing $tag"
+              grep -qE "^$tag [^ ]+ virtiofs( |$)" "$fstab" || missing="$missing $tag"
             done
             if [ -n "$missing" ]; then
-              echo "9p shares missing from the guest fstab:$missing" >&2
-              echo "Declare them as virtualisation.fileSystems, not fileSystems." >&2
+              echo "virtiofs shares missing from the guest fstab:$missing" >&2
+              echo "Declare them as virtualisation.fileSystems with fsType = \"virtiofs\", not fileSystems." >&2
               echo "--- generated fstab ---" >&2
               cat "$fstab" >&2
               exit 1

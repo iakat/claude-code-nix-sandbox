@@ -14,6 +14,7 @@
   coreutils,
   nixos,
   socat,
+  virtiofsd,
   xorg,
   # Toggle host network access (set false for isolated network)
   network ? true,
@@ -56,79 +57,95 @@ let
         # qemu-vm.nix replaces the whole fileSystems attrset with mkVMOverride,
         # so plain entries are silently discarded and never reach the guest
         # fstab. They were, which meant none of these shares mounted at all.
-        # Project directory via 9p (host path passed at runtime via QEMU_OPTS)
+        #
+        # All shares ride virtiofs (device = the virtiofsd mount tag; the
+        # launcher exports each tag). 9p cannot mmap shared files, and every
+        # omp database under ~/.omp is WAL-mode SQLite whose wal-index lives
+        # in a shared mmap of the -shm file — over 9p omp died at startup
+        # with SQLITE_IOERR_SHMMAP (can1357/oh-my-pi#9082). virtiofsd serves
+        # mmap and fcntl byte-range locks through to the host kernel, which
+        # is the all-processes-on-one-host access pattern WAL is defined for;
+        # concurrent VMs sharing ~/.omp stay coherent because their locks
+        # meet in that single host kernel.
+
+        # Project directory (host path passed at runtime by the launcher's
+        # virtiofsd for this tag)
         virtualisation.fileSystems."/project" = {
           device = "project_share";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "msize=104857600" ];
+          fsType = "virtiofs";
           noCheck = true;
         };
 
-        # Claude auth via 9p (nofail: dir may not exist on host)
+        # Claude auth (nofail: dir may not exist on host)
         virtualisation.fileSystems."/home/sandbox/.claude" = {
           device = "claude_auth";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "nofail" ];
           noCheck = true;
         };
 
-        # omp ("oh my pi") agent config + auth via 9p — read-WRITE, unlike the
+        # omp ("oh my pi") agent config + auth — read-WRITE, unlike the
         # git/gh/ssh shares below: omp rewrites ~/.omp/agent/config.yml at
         # runtime under an advisory lock, so a ro share would break every
-        # launch. The launcher seeds that file host-side before QEMU starts
-        # (9p exports the host directory wholesale; a single file inside it
-        # cannot be shared on its own — the same reason .gitconfig rides the
-        # meta dir). Mirrors claude_auth: nofail covers a skipped virtfs.
+        # launch. The launcher seeds that file host-side before virtiofsd
+        # starts (the share exports the host directory wholesale; a single
+        # file inside it cannot be shared on its own — the same reason
+        # .gitconfig rides the meta dir). Mirrors claude_auth: nofail covers
+        # a skipped share.
         virtualisation.fileSystems."/home/sandbox/.omp" = {
           device = "omp_auth";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "nofail" ];
           noCheck = true;
         };
 
-        # Git per-directory config via 9p (nofail: may not exist on host).
-        # ~/.gitconfig is a FILE, not a directory, and 9p local driver can only
-        # export directories — so that file is seeded by copy through the meta
-        # dir instead (see the launcher script and interactiveShellInit below).
+        # Git per-directory config (nofail: may not exist on host).
+        # ~/.gitconfig is a FILE, not a directory, and virtiofsd can only
+        # export directories — so that file is seeded by copy through the
+        # meta dir instead (see the launcher script and interactiveShellInit
+        # below).
         virtualisation.fileSystems."/home/sandbox/.config/git" = {
           device = "git_config_dir";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "ro" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "ro" "nofail" ];
           noCheck = true;
         };
 
-        # GitHub CLI config via 9p (nofail: dir may not exist on host)
+        # GitHub CLI config (nofail: dir may not exist on host)
         virtualisation.fileSystems."/home/sandbox/.config/gh" = {
           device = "gh_config_dir";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "ro" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "ro" "nofail" ];
           noCheck = true;
         };
 
-        # SSH keys via 9p (nofail: dir may not exist on host)
+        # SSH keys (nofail: dir may not exist on host)
         virtualisation.fileSystems."/home/sandbox/.ssh" = {
           device = "ssh_dir";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "ro" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "ro" "nofail" ];
           noCheck = true;
         };
 
-        # Metadata (entrypoint, API key) via 9p
+        # Metadata (entrypoint, API key)
         virtualisation.fileSystems."/mnt/meta" = {
           device = "claude_meta";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "ro" ];
+          fsType = "virtiofs";
+          options = [ "ro" ];
           noCheck = true;
         };
 
-        # Per-project state dir via 9p — writable, unlike the config shares.
+        # Per-project state dir — writable, unlike the config shares.
         # Carries ~/.local so pipx/npm/venv installs survive VM restarts.
         virtualisation.fileSystems."/mnt/state" = {
           device = "state_dir";
-          fsType = "9p";
-          options = [ "trans=virtio" "version=9p2000.L" "nofail" ];
+          fsType = "virtiofs";
+          options = [ "nofail" ];
           noCheck = true;
         };
+
+        # Guest-side virtiofs client for the fstab entries above.
+        boot.kernelModules = [ "virtio_fs" ];
 
         # Minimal Xorg + WM for Chromium display (shown in QEMU window)
         services.xserver = {
@@ -168,15 +185,16 @@ let
               export HOME="$host_home"
               sudo mkdir -p "$host_home"
               sudo chown sandbox:users "$host_home"
-              # Symlink dotfiles from fixed 9p mount to real home path
-              # (.omp included: omp's config + auth live there)
+              # Symlink dotfiles from the fixed share mounts to the real
+              # home path (.omp included: omp's config + auth live there)
               for item in .claude .omp .config .ssh; do
                 if [[ -e "/home/sandbox/$item" ]]; then
                   ln -sfn "/home/sandbox/$item" "$host_home/$item"
                 fi
               done
-              # .gitconfig is a file, not a directory — 9p can't export it.
-              # Copy it from metadata (like claude.json below).
+              # .gitconfig is a file, not a directory — a share can only
+              # export a directory, so copy it from metadata (like
+              # claude.json below).
               if [[ -f /mnt/meta/gitconfig ]]; then
                 cp /mnt/meta/gitconfig "$host_home/.gitconfig"
                 chmod 644 "$host_home/.gitconfig"
@@ -286,7 +304,7 @@ let
 in
 writeShellApplication {
   name = "claude-sandbox-vm";
-  runtimeInputs = [ coreutils socat xorg.xset ];
+  runtimeInputs = [ coreutils socat virtiofsd xorg.xset ];
 
   text = ''
     shell_mode=false
@@ -335,7 +353,8 @@ writeShellApplication {
     # into the reconstructed host home. The chromium profile is deliberately
     # NOT persisted here, unlike the other backends: this VM runs stock
     # chromium rather than the wrapper, so it ignores CHROMIUM_USER_DATA_DIR,
-    # and a SQLite-backed browser profile over 9p risks locking problems.
+    # and a SQLite-backed browser profile on a shared filesystem risks
+    # locking problems.
     mkdir -p "$state_dir/local"/{bin,lib,share}
 
     # Socket backing the guest's second serial console (ttyS1). Lives in the
@@ -370,7 +389,10 @@ writeShellApplication {
     mkdir -p "$disk_root"
     NIX_DISK_IMAGE="$disk_root/$sd_base-$sd_hash.qcow2"
     export NIX_DISK_IMAGE
-    trap 'rm -rf "$meta_dir" "$NIX_DISK_IMAGE"' EXIT
+    # PIDs of the per-share virtiofsd daemons (populated by start_vfsd below);
+    # the trap tears them down alongside the metadata dir and disk image.
+    vfsd_pids=()
+    trap 'rm -rf "$meta_dir" "$NIX_DISK_IMAGE"; if [[ "''${#vfsd_pids[@]}" -gt 0 ]]; then kill "''${vfsd_pids[@]}" 2>/dev/null || true; fi' EXIT
 
     if [[ "$shell_mode" == true ]]; then
       echo "bash" > "$meta_dir/entrypoint"
@@ -411,11 +433,62 @@ writeShellApplication {
       echo "$LC_ALL" > "$meta_dir/lc_all"
     fi
 
-    # Share project, metadata, and auth dirs via 9p
+    # Share project, metadata, and auth dirs via virtiofs.
+    #
+    # Each directory gets its own virtiofsd instance — one vhost-user socket
+    # per tag, in the per-launch meta_dir so concurrent VMs never collide —
+    # attached to the guest as a vhost-user-fs-pci device; the
+    # guest fstab (virtualisation.fileSystems above) mounts each tag. The
+    # generated run script already provides what vhost-user requires:
+    # shared guest RAM (`-object memory-backend-memfd,id=mem0,share=on
+    # -machine memory-backend=mem0`, sized from virtualisation.memorySize)
+    # and its own virtiofsd daemons for nix-store/xchg/shared.
+    #
+    # Why virtiofs instead of 9p: every omp database under ~/.omp is
+    # WAL-mode SQLite, and WAL's wal-index needs a shared mmap of the -shm
+    # file. 9p cannot mmap shared files, so omp died at startup with
+    # SQLITE_IOERR_SHMMAP (can1357/oh-my-pi#9082). virtiofsd serves mmap and
+    # fcntl byte-range locks through to the host kernel — the
+    # all-processes-on-one-host access pattern WAL requires. Concurrent VMs
+    # stay coherent because their locks serialize in that single kernel.
     qemu_extra=()
-    qemu_extra+=(-virtfs "local,path=$project_dir,mount_tag=project_share,security_model=none,id=project_share")
-    qemu_extra+=(-virtfs "local,path=$meta_dir,mount_tag=claude_meta,security_model=none,id=claude_meta,readonly=on")
-    qemu_extra+=(-virtfs "local,path=$state_dir,mount_tag=state_dir,security_model=none,id=state_dir")
+
+    # Start one virtiofsd exporting `dir` under `tag`. "ro" adds --readonly
+    # (the host-side equivalent of 9p's readonly=on); rw adds --writeback,
+    # matching the run script's own rw daemons. The daemon logs into the
+    # state dir; its socket appearing is the readiness signal — if it dies
+    # instead, surface its log rather than a cryptic QEMU chardev error.
+    start_vfsd() {
+      local tag="$1" dir="$2" mode="$3"
+      # Socket in the short per-launch meta_dir: a unix socket path must be
+      # shorter than SUN_LEN (108), and the state dir can nest arbitrarily
+      # deep. The trap's `rm -rf "$meta_dir"` removes them with the rest.
+      local sock="$meta_dir/vfsd-$tag.sock"
+      local pid
+      rm -f "$sock"
+      if [[ "$mode" == ro ]]; then
+        virtiofsd --socket-path "$sock" --shared-dir "$dir" --readonly >"$state_dir/virtiofsd-$tag.log" 2>&1 &
+      else
+        virtiofsd --socket-path "$sock" --shared-dir "$dir" --writeback >"$state_dir/virtiofsd-$tag.log" 2>&1 &
+      fi
+      pid=$!
+      vfsd_pids+=("$pid")
+      for ((i = 0; i < 50; i++)); do
+        [[ -S "$sock" ]] && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      if [[ ! -S "$sock" ]]; then
+        echo "Error: virtiofsd for $tag ($dir) failed to start:" >&2
+        cat "$state_dir/virtiofsd-$tag.log" >&2
+        exit 1
+      fi
+      qemu_extra+=(-chardev "socket,id=charvfs_$tag,path=$sock" -device "vhost-user-fs-pci,chardev=charvfs_$tag,tag=$tag")
+    }
+
+    start_vfsd project_share "$project_dir" rw
+    start_vfsd claude_meta "$meta_dir" ro
+    start_vfsd state_dir "$state_dir" rw
     # Second serial device -> guest ttyS1. Appended after the build-time
     # "-serial stdio", so stdio stays ttyS0 (the console claude runs on) and
     # this becomes ttyS1. A stale socket from a killed VM would block bind.
@@ -424,7 +497,7 @@ writeShellApplication {
 
     host_claude_dir="''${HOME}/.claude"
     if [[ -d "$host_claude_dir" ]]; then
-      qemu_extra+=(-virtfs "local,path=$host_claude_dir,mount_tag=claude_auth,security_model=none,id=claude_auth")
+      start_vfsd claude_auth "$host_claude_dir" rw
     fi
 
     # omp ("oh my pi"): seed host ~/.omp/agent/config.yml when missing, then
@@ -432,19 +505,19 @@ writeShellApplication {
     # — unlike the -d-guarded claude_auth above — because the seed guarantees
     # the directory exists before the export.
     ${spec.ompConfigSnippet}
-    qemu_extra+=(-virtfs "local,path=$HOME/.omp,mount_tag=omp_auth,security_model=none,id=omp_auth")
+    start_vfsd omp_auth "$HOME/.omp" rw
 
     if [[ -f "$HOME/.gitconfig" ]]; then
       cp "$HOME/.gitconfig" "$meta_dir/gitconfig"
     fi
     if [[ -d "$HOME/.config/git" ]]; then
-      qemu_extra+=(-virtfs "local,path=$HOME/.config/git,mount_tag=git_config_dir,security_model=none,id=git_config_dir,readonly=on")
+      start_vfsd git_config_dir "$HOME/.config/git" ro
     fi
     if [[ -d "$HOME/.config/gh" ]]; then
-      qemu_extra+=(-virtfs "local,path=$HOME/.config/gh,mount_tag=gh_config_dir,security_model=none,id=gh_config_dir,readonly=on")
+      start_vfsd gh_config_dir "$HOME/.config/gh" ro
     fi
     if [[ -d "$HOME/.ssh" ]]; then
-      qemu_extra+=(-virtfs "local,path=$HOME/.ssh,mount_tag=ssh_dir,security_model=none,id=ssh_dir,readonly=on")
+      start_vfsd ssh_dir "$HOME/.ssh" ro
     fi
 
     # Headless handling. qemu-vm.nix with graphics=true emits NO -display

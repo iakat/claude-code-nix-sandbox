@@ -251,10 +251,10 @@ in
 
   # Host-side omp prep: guarantee ~/.omp/agent/config.yml exists as a writable
   # regular file BEFORE the sandbox starts, so the whole ~/.omp directory can
-  # be shared rw (bind / 9p) and omp never sees a first-run without config.
-  # Host-side in every backend, including the VM: 9p exports the host
-  # directory wholesale, so the file must exist on the host before QEMU
-  # starts — one code path for all three backends.
+  # be shared rw (bind / virtiofs) and omp never sees a first-run without
+  # config. Host-side in every backend, including the VM: the share exports
+  # the host directory wholesale, so the file must exist on the host before
+  # QEMU starts — one code path for all three backends.
   #
   # Seeds ONLY when missing: after first launch omp owns the file and its
   # runtime rewrites (see the ompSettings comment) must win over the declared
@@ -302,7 +302,7 @@ in
   # --- DOCUMENTED CHECKLIST (backends implement explicitly) ---
   #
   # Dotfile mounts (mechanism differs per backend):
-  #   ~/.claude                    — auth persistence (bind / 9p); login token in
+  #   ~/.claude                    — auth persistence (bind / virtiofs); login token in
   #                                  .credentials.json, permissions in settings.json
   #   ~/.claude.json               — seeded by COPY at launch, never bind-mounted
   #                                  (claude-code rewrites it via atomic rename, so a
@@ -318,10 +318,10 @@ in
   #                                  (omp flock-locks and atomically rewrites
   #                                  it), never a store symlink or ro share.
   #                                  See ompConfigSnippet.
-  #   ~/.gitconfig, ~/.config/git  — git config (ro-bind / 9p)
-  #   ~/.ssh                       — SSH keys (ro-bind / 9p)
-  #   ~/.config/gh                 — GitHub CLI config (ro-bind / 9p)
-  #   .config/chromium             — per-project profile (bind / 9p)
+  #   ~/.gitconfig, ~/.config/git  — git config (ro-bind / virtiofs)
+  #   ~/.ssh                       — SSH keys (ro-bind / virtiofs)
+  #   ~/.config/gh                 — GitHub CLI config (ro-bind / virtiofs)
+  #   .config/chromium             — per-project profile (bind / virtiofs)
   #
   # Sockets (mechanism differs per backend):
   #   X11 (/tmp/.X11-unix/Xn)     — display forwarding

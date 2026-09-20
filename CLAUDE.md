@@ -42,7 +42,7 @@ manager/               # Rust/Axum web dashboard + REST API
 
 All backends are `callPackage`-able functions producing `writeShellApplication` derivations. They import `nix/sandbox-spec.nix` for the canonical package list, Chrome extension IDs, and `/etc` paths, then implement the backend-specific delivery mechanism. They share a common pattern: dynamic bash arrays for optional flags (display, D-Bus, GPU, auth, network).
 
-**Bubblewrap** uses `symlinkJoin` to build PATH from packages. **Container** evaluates a NixOS config (`nixosSystem`) to get a system closure (`toplevel`), creates an ephemeral container root, and uses `setpriv` to drop from root to the real user's UID/GID (detected via `SUDO_USER`). **VM** builds a full NixOS VM with Xorg+openbox for Chromium display and serial console for claude-code interaction; shares directories via 9p.
+**Bubblewrap** uses `symlinkJoin` to build PATH from packages. **Container** evaluates a NixOS config (`nixosSystem`) to get a system closure (`toplevel`), creates an ephemeral container root, and uses `setpriv` to drop from root to the real user's UID/GID (detected via `SUDO_USER`). **VM** builds a full NixOS VM with Xorg+openbox for Chromium display and serial console for claude-code interaction; shares directories via virtiofs (one `virtiofsd` per share — 9p cannot mmap SQLite WAL shared memory, see the vm-virtiofs skill).
 
 ### Remote Manager
 
@@ -127,6 +127,7 @@ Non-obvious patterns discovered during development — read before modifying rel
 - `artifacts/skills/nixos-vm-integration-test-with-stub-services.md — nixosTest with stub backends, system user shell gotcha`
 - `artifacts/skills/nix-overlay-injection-into-nixosSystem-calls.md — why overlays must be injected into every nixosSystem call`
 - `artifacts/skills/vm-9p-runtime-path-fixup-for-session-continuity.md — build-time vs runtime paths, meta dir, bind-mount vs symlink for getcwd()`
+- `artifacts/skills/vm-virtiofs-shares-for-sqlite-wal.md — 9p can't mmap SQLite WAL shm (SQLITE_IOERR_SHMMAP); virtiofsd per share, upstream memfd backend, multi-VM lock coherence`
 - `artifacts/skills/claude-code-session-jsonl-extraction.md — JSONL structure, jq extraction patterns, session summarizer tool`
 - `artifacts/skills/chromium-cross-sandbox-isolation-dbus-and-cdp.md — D-Bus singleton + CDP port conflict, per-project profile fix`
 - `artifacts/skills/chromium-extension-bundling-via-managed-policy.md — why managed policy for extension install, alternatives considered, per-backend mounting`

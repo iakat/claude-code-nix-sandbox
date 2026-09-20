@@ -75,9 +75,9 @@ Git push/pull works inside all sandboxes — `~/.gitconfig`, `~/.config/git/`, `
 
 | Resource | Bubblewrap | Container | VM |
 |---|---|---|---|
-| Project directory | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (9p) |
-| `~/.claude` | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (9p) |
-| `~/.gitconfig`, `~/.ssh` | Read-only (bind-mount) | Read-only (bind-mount) | Read-only (9p) |
+| Project directory | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
+| `~/.claude` | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
+| `~/.gitconfig`, `~/.ssh` | Read-only (bind-mount) | Read-only (bind-mount) | Read-only (virtiofs) |
 | `/nix/store` | Read-only | Read-only | Shared from host |
 | `/home` | Isolated (tmpfs) | Isolated | Separate filesystem |
 | Network | Shared by default | Shared by default | NAT by default |

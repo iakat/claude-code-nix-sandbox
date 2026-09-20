@@ -25,7 +25,7 @@ The backend imports `nix/sandbox-spec.nix` for the canonical package list and Ch
 - **4 GB RAM, 4 cores** (defaults from `virtualisation` module)
 - **Serial console on stdio** for Claude Code interaction
 - **QEMU GTK window** running Xorg + Openbox for Chromium display (omitted automatically on headless hosts)
-- **9p filesystem shares** for project directory, auth, git config, SSH keys, and metadata
+- **virtiofs shares** (one `virtiofsd` per share) for project directory, auth, omp state, git config, SSH keys, and metadata
 
 ### Console setup
 
@@ -47,23 +47,44 @@ QEMU_OPTS="-vnc :0" ./result/bin/claude-sandbox-vm /path/to/project
 
 (QEMU keeps a single `-display` config and the last `-display` wins, so a user-provided `QEMU_OPTS` is appended after the launcher's flags and overrides them.) See `artifacts/skills/nixos-qemu-vm-headless-display-none.md`.
 
-### 9p filesystem shares
+### virtiofs shares
+
+Each directory is exported by its own `virtiofsd` instance — one vhost-user
+socket per tag, created in the per-launch metadata dir so any number of VMs
+can run concurrently without colliding — and attached to the guest as a
+`vhost-user-fs-pci` device. The guest mounts each tag through
+`virtualisation.fileSystems` entries with `fsType = "virtiofs"`. The
+generated run script provides the shared guest RAM (`memory-backend-memfd`)
+that vhost-user devices require and runs its own daemons for
+`/nix/.ro-store`, `/tmp/shared`, and `/tmp/xchg`.
 
 | Mount point | Tag | Mode | Description |
 |---|---|---|---|
 | `/project` | `project_share` | Read-write | Project directory |
 | `/home/sandbox/.claude` | `claude_auth` | Read-write, nofail | Auth persistence |
-| `/home/sandbox/.gitconfig` | `git_config` | Read-only, nofail | Git config |
+| `/home/sandbox/.omp` | `omp_auth` | Read-write, nofail | omp config + auth |
 | `/home/sandbox/.config/git` | `git_config_dir` | Read-only, nofail | Git config directory |
 | `/home/sandbox/.config/gh` | `gh_config_dir` | Read-only, nofail | GitHub CLI config |
 | `/home/sandbox/.ssh` | `ssh_dir` | Read-only, nofail | SSH keys |
 | `/mnt/meta` | `claude_meta` | Read-only | Entrypoint and API key |
+| `/mnt/state` | `state_dir` | Read-write, nofail | Per-project state (`~/.local`) |
 
-Shares use `msize=104857600` (100 MB) for the project directory to improve I/O throughput. The `nofail` option allows the VM to boot even if the host directory doesn't exist.
+`~/.gitconfig` is a file, so no directory share can export it — it is copied
+through the meta dir instead (see Metadata passing).
+
+**Why virtiofs and not 9p:** every omp database under `~/.omp` is WAL-mode
+SQLite, and WAL's wal-index needs a shared `mmap` of the `-shm` file. 9p
+cannot mmap shared files, so omp died at startup with `SQLITE_IOERR_SHMMAP`
+(see [can1357/oh-my-pi#9082](https://github.com/can1357/oh-my-pi/issues/9082)
+for the WAL-on-network-filesystem background). `virtiofsd` serves mmap and
+`fcntl` byte-range locks through to the host kernel — the
+all-processes-on-one-host access pattern WAL is defined for. Multiple
+concurrent VMs sharing `~/.omp` stay coherent for the same reason: their
+locks serialize in the single host kernel.
 
 ### Metadata passing
 
-The entrypoint command, API key, GitHub token, and locale settings are written to a temporary directory on the host and shared via 9p as `/mnt/meta`. The VM reads these files during shell init:
+The entrypoint command, API key, GitHub token, and locale settings are written to a temporary directory on the host and shared via virtiofs as `/mnt/meta`. The VM reads these files during shell init:
 
 - `/mnt/meta/entrypoint` — command to run (claude or bash)
 - `/mnt/meta/apikey` — Anthropic API key

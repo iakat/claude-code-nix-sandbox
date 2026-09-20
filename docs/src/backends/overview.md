@@ -6,9 +6,9 @@ All three backends share a common pattern: they are `callPackage`-able Nix funct
 
 | Resource | Bubblewrap | Container | VM |
 |---|---|---|---|
-| Project directory | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (9p) |
-| `~/.claude` | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (9p) |
-| `~/.gitconfig`, `~/.ssh` | Read-only (bind-mount) | Read-only (bind-mount) | Read-only (9p) |
+| Project directory | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
+| `~/.claude` | Read-write (bind-mount) | Read-write (bind-mount) | Read-write (virtiofs) |
+| `~/.gitconfig`, `~/.ssh` | Read-only (bind-mount) | Read-only (bind-mount) | Read-only (virtiofs) |
 | `/nix/store` | Read-only | Read-only | Shared from host |
 | `/home` | Isolated (tmpfs) | Isolated | Separate filesystem |
 | Network | Shared by default | Shared by default | NAT by default |
@@ -18,7 +18,7 @@ All three backends share a common pattern: they are `callPackage`-able Nix funct
 | D-Bus | Forwarded | Forwarded | Isolated |
 | SSH agent | Forwarded | Forwarded | Isolated |
 | Nix commands | Via daemon | Via daemon | Local store |
-| GitHub CLI config | Forwarded | Forwarded | Forwarded (9p) |
+| GitHub CLI config | Forwarded | Forwarded | Forwarded (virtiofs) |
 | Locale | Forwarded | Forwarded | Forwarded (meta) |
 | Kernel | Shared | Shared | Separate |
 
