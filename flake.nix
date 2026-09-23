@@ -204,17 +204,29 @@
           vm-runner = pkgs.runCommand "vm-runner-check" { } ''
             run=${self.packages.${system}.vm.microvmRunner}/bin/microvm-run
             launcher=${self.packages.${system}.vm}/bin/claude-sandbox-vm
-            # build-time command line (the runner script)
-            for probe in "microvm," "acpi=on" "mem-merge=on" "memory-backend-memfd" \
+            # build-time command line (the runner script). The shared memfd is
+            # deliberately ABSENT here: it is emitted by the launcher at
+            # launch time so guest RAM/CPU can be overridden per launch (a
+            # second id=mem object would make QEMU abort).
+            for probe in "microvm," "acpi=on" "mem-merge=on" \
                          "free-page-reporting=on" "virtio-net-device" "-nographic"; do
               grep -qF -- "$probe" "$run" || {
                 echo "the generated hypervisor command line is missing: $probe" >&2
                 exit 1
               };
             done
-            # launch-time command line (the launcher injects these via
-            # CLAUDE_SANDBOX_VM_QEMU_ARGS, so they are not in the runner)
-            for probe in "vhost-user-fs-device" "virtio-net-device"; do
+            ! grep -qF "memory-backend-memfd" "$run" || {
+              echo "the runner still emits the shared memfd; the launcher must own it (duplicate id=mem aborts QEMU)" >&2
+              exit 1
+            }
+            # launch-time command line: the launcher injects these via
+            # CLAUDE_SANDBOX_VM_QEMU_ARGS (word-split by the extraArgsScript
+            # hook, landing LAST in QEMU's argv — last-wins parsing overrides
+            # the build-time -m/-smp). The memfd/numa pair sizes the actual
+            # guest RAM for the vhost-user shares; --mem/--cpus + env pick the
+            # values per launch.
+            for probe in "vhost-user-fs-device" "virtio-net-device" \
+                         "memory-backend-memfd" "node,memdev=mem" "-smp" "--mem" "--cpus"; do
               grep -qF -- "$probe" "$launcher" || {
                 echo "the launcher's hypervisor arguments are missing: $probe" >&2
                 exit 1

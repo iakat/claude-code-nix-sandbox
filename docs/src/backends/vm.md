@@ -343,11 +343,33 @@ useful for inspecting a running VM:
 socat - UNIX-CONNECT:~/.local/state/claude-code-nix-sandbox/projects/<project>-<hash>/qmp.sock
 ```
 
+## Resources (RAM and CPUs)
+
+Guest RAM (MiB) and vCPU count are configurable three ways, most specific
+first: `--mem` / `--cpus` flags, `CLAUDE_SANDBOX_MEM` / `CLAUDE_SANDBOX_CPUS`
+env vars, then the build-time defaults (4096 MiB / 4 vCPUs, or the `mem` /
+`vcpu` derivation parameters / module options). The override applies at VM
+start — a running VM keeps its resources until it is stopped and relaunched:
+
+```bash
+claude-sandbox-vm --mem 8192 --cpus 8 /path/to/project
+CLAUDE_SANDBOX_MEM=16384 claude-sandbox-vm /path/to/project
+```
+
+This works without a rebuild because the pieces of the QEMU command line that
+size the guest (`-m`, `-smp`, and the shared memfd backend the vhost-user
+shares require) are composed by the launcher at launch time and land last in
+QEMU's argv, where last-wins parsing overrides the build-time values. Exactly
+2048 MiB is rejected: QEMU hangs with it
+([microvm.nix#171](https://github.com/microvm-nix/microvm.nix/issues/171)).
+
 ## Nix parameters
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `network` | bool | `true` | Attach the user-mode (NAT) NIC |
+| `mem` | int (MiB) | `4096` | Default guest RAM; per-launch override via `--mem` / `CLAUDE_SANDBOX_MEM` |
+| `vcpu` | int | `4` | Default vCPU count; per-launch override via `--cpus` / `CLAUDE_SANDBOX_CPUS` |
 | `extraModules` | list of NixOS modules | `[]` | Extra NixOS config for the guest |
 | `microvm` | flake | (required) | The microvm.nix flake (provides `nixosModules.microvm`) |
 | `nixos` | function | (required) | NixOS evaluator |
@@ -357,13 +379,13 @@ socat - UNIX-CONNECT:~/.local/state/claude-code-nix-sandbox/projects/<project>-<
 ```nix
 pkgs.callPackage ./nix/backends/vm.nix {
   inherit microvm;              # the microvm.nix flake input
+  mem = 8192;                   # default guest RAM (MiB)
+  vcpu = 8;                     # default vCPUs
   nixos = args: nixpkgs.lib.nixosSystem {
     system = "x86_64-linux";
     modules = args.imports;
   };
   extraModules = [{
-    microvm.mem = 8192;
-    microvm.vcpu = 8;
     # On a KVM host that wants the literal host CPU instead of `max,-sgx`:
     microvm.cpu = "host,+x2apic,-sgx";
     environment.systemPackages = with pkgs; [ python3 ];

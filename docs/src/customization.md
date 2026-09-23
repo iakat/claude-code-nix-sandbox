@@ -2,6 +2,24 @@
 
 All backends are `callPackage`-able Nix functions, so you can override their parameters directly in your flake.
 
+## Resource limits (RAM & CPUs)
+
+The container and VM backends take `mem` (MiB) and `cpus` parameters as
+launch-time defaults, overridable per launch with `--mem`/`--cpus` or
+`CLAUDE_SANDBOX_MEM`/`CLAUDE_SANDBOX_CPUS` — no rebuild needed:
+
+```bash
+claude-sandbox-vm --mem 8192 --cpus 8 ~/project
+sudo claude-sandbox-container --mem 8192 --cpus 4 ~/project
+```
+
+In the NixOS module these are `services.claude-sandbox.vm.mem` /
+`vm.vcpu` (allocations, applied to the QEMU command line at launch) and
+`services.claude-sandbox.container.mem` / `container.cpus` (ceilings, applied
+as systemd `MemoryMax`/`CPUQuota` on the container's scope unit). The
+bubblewrap backend cannot enforce resource limits: it is unprivileged and has
+no cgroup authority — use the container or VM backend when limits matter.
+
 ## Extra packages (bubblewrap)
 
 Add packages to the sandbox PATH via `extraPackages`:

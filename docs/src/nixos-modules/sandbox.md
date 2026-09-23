@@ -65,10 +65,24 @@ Install the systemd-nspawn container sandbox.
 
 ### `services.claude-sandbox.container.extraModules`
 
-Extra NixOS modules for the container.
+Extra NixOS modules for the container guest.
 
 - Type: `list of anything`
 - Default: `[]`
+
+### `services.claude-sandbox.container.mem`
+
+Memory ceiling (`MemoryMax`) for the container in MiB; `null` (default) = unlimited. Per-launch override: `--mem` or `CLAUDE_SANDBOX_MEM`.
+
+- Type: `null or signed integer`
+- Default: `null`
+
+### `services.claude-sandbox.container.cpus`
+
+CPU ceiling (`CPUQuota`) for the container in whole CPUs; `null` (default) = unlimited. Per-launch override: `--cpus` or `CLAUDE_SANDBOX_CPUS`.
+
+- Type: `null or signed integer`
+- Default: `null`
 
 ### `services.claude-sandbox.vm.enable`
 
@@ -83,6 +97,20 @@ Extra NixOS modules for the VM.
 
 - Type: `list of anything`
 - Default: `[]`
+
+### `services.claude-sandbox.vm.mem`
+
+Guest RAM for the VM in MiB — the default a launch uses; per-launch override: `--mem` or `CLAUDE_SANDBOX_MEM`. `2048` is rejected (it hangs QEMU).
+
+- Type: `signed integer`
+- Default: `4096`
+
+### `services.claude-sandbox.vm.vcpu`
+
+Guest vCPU count for the VM — the default a launch uses; per-launch override: `--cpus` or `CLAUDE_SANDBOX_CPUS`.
+
+- Type: `signed integer`
+- Default: `4`
 
 ## Implied configuration
 

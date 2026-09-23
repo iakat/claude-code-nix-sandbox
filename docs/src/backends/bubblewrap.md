@@ -30,6 +30,10 @@ The sandbox script imports `nix/sandbox-spec.nix` for the canonical package list
 - **GPU**: `/dev/dri` and `/run/opengl-driver` forwarded for hardware acceleration
 - **Audio**: PipeWire and PulseAudio sockets forwarded
 - **Network**: shared with host by default, `--unshare-net` when `network = false`
+- **Resources**: RAM/CPU limits are NOT enforceable here — bwrap is
+  unprivileged and has no cgroup authority. Use the container
+  (`--mem`/`--cpus` → `MemoryMax`/`CPUQuota`) or VM (`--mem`/`--cpus`)
+  backend when limits matter.
 - **Nix**: daemon socket forwarded with `NIX_REMOTE=daemon`
 
 The sandbox home is `/home/sandbox`. The process runs as your user (no UID mapping).

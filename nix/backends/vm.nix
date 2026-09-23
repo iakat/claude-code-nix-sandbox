@@ -28,6 +28,12 @@
   nixos,
   # Toggle host network access (set false for isolated network)
   network ? true,
+  # Guest RAM (MiB) and vCPU count — the DEFAULTS a launch uses. --mem/--cpus
+  # or CLAUDE_SANDBOX_MEM/CLAUDE_SANDBOX_CPUS override per launch without a
+  # rebuild: the QEMU argv pieces that size the guest are composed at launch
+  # (see the launcher's guest-sizing block).
+  mem ? 4096,
+  vcpu ? 4,
   # Additional NixOS modules for the VM
   extraModules ? [ ],
 }:
@@ -48,8 +54,7 @@ let
     # ---------------------------------------------------------------- microvm
     microvm = {
       hypervisor = "qemu";
-      mem = 4096;
-      vcpu = 4;
+      inherit mem vcpu;
 
       # CPU model. microvm.nix's default (cpu = null) emits `-enable-kvm` plus
       # `-cpu host`: with no /dev/kvm QEMU then *exits* instead of falling back
@@ -105,17 +110,17 @@ let
 
       # Our virtiofs devices are vhost-user, which is handed guest RAM over a
       # socket: the memory has to be a shared memfd. microvm.nix only emits
-      # that object when it declared a share itself, and this configuration
+      # that object when it declares shares itself, and this configuration
       # declares none (the guest has its own store disk, and every other share
-      # comes from the launcher), so the backend is declared here. The size
-      # must match microvm.mem. Note the consequence documented above: shared
-      # RAM is not mergeable, so this is also what rules KSM out for the guest.
-      qemu.extraArgs = [
-        "-object"
-        "memory-backend-memfd,id=mem,size=${toString 4096}M,share=on"
-        "-numa"
-        "node,memdev=mem"
-      ];
+      # comes from the launcher) — so the LAUNCHER emits it at launch time
+      # together with -numa node,memdev=mem and the -m/-smp overrides, sized
+      # from --mem / CLAUDE_SANDBOX_MEM (default: the mem parameter). That
+      # placement is what makes guest RAM and vCPUs reconfigurable per launch
+      # without a rebuild: the extraArgsScript output lands last in QEMU's
+      # argv, and its last-wins parsing overrides the build-time values
+      # (measured via info numa / query-cpus-fast). Shared RAM is not
+      # KSM-mergeable (see the KSM note above), so this also keeps KSM ruled
+      # out for the guest.
 
       # QEMU arguments that can only be composed at launch: the virtiofs
       # devices for the runtime shares (their sources are the user's project,
@@ -605,6 +610,8 @@ writeShellApplication {
     shell_mode=false
     stop_mode=false
     gh_token=false
+    vm_mem=""
+    vm_cpus=""
     project_dir="."
     agent_args=()
 
@@ -614,6 +621,8 @@ writeShellApplication {
       echo "  project-dir defaults to the current directory ('.')." >&2
       echo "  Anything after '--' is passed straight to the agent (omp)." >&2
       echo "" >&2
+      echo "  --mem MiB   Guest RAM in MiB (default ${toString mem}; env CLAUDE_SANDBOX_MEM)" >&2
+      echo "  --cpus N    Guest vCPUs (default ${toString vcpu}; env CLAUDE_SANDBOX_CPUS)" >&2
       echo "  --shell     Drop into a tmux session with bash instead of launching omp" >&2
       echo "  --stop      Terminate this project's running VM" >&2
       echo "  --gh-token  Forward GH_TOKEN/GITHUB_TOKEN env vars into VM" >&2
@@ -627,6 +636,8 @@ writeShellApplication {
         --shell)    shell_mode=true; shift ;;
         --stop)     stop_mode=true; shift ;;
         --gh-token) gh_token=true; shift ;;
+        --mem)      vm_mem="$2"; shift 2 ;;
+        --cpus)     vm_cpus="$2"; shift 2 ;;
         --help|-h)  usage; exit 0 ;;
         --)         shift; agent_args=("$@"); break ;;
         -*)         echo "Unknown option: $1 (pass claude args after '--')" >&2; exit 1 ;;
@@ -669,6 +680,26 @@ writeShellApplication {
       echo "Error: /dev/kvm is not available — the VM backend requires KVM." >&2
       echo "  On a bare host: load kvm_amd/kvm_intel and check group membership." >&2
       echo "  Inside a sandbox: start it from 'nix build .#sandbox-kvm' (binds /dev/kvm)." >&2
+      exit 1
+    fi
+
+    # Guest sizing: --mem/--cpus beat CLAUDE_SANDBOX_MEM/CLAUDE_SANDBOX_CPUS,
+    # which beat the build-time defaults. Applies at VM start; a running VM
+    # keeps its resources until it is stopped.
+    mem_mib="''${vm_mem:-''${CLAUDE_SANDBOX_MEM:-${toString mem}}}"
+    cpu_count="''${vm_cpus:-''${CLAUDE_SANDBOX_CPUS:-${toString vcpu}}}"
+    if ! [[ "$mem_mib" =~ ^[0-9]+$ ]]; then
+      echo "Error: --mem/CLAUDE_SANDBOX_MEM must be an integer (MiB), got: $mem_mib" >&2
+      exit 1
+    fi
+    if [[ "$mem_mib" -eq 2048 ]]; then
+      # QEMU hangs with exactly 2 GiB of guest RAM
+      # (github:microvm-nix/microvm.nix#171) — reject it up front.
+      echo "Error: 2048 MiB of guest RAM hangs QEMU; pick any other size." >&2
+      exit 1
+    fi
+    if ! [[ "$cpu_count" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Error: --cpus/CLAUDE_SANDBOX_CPUS must be a positive integer, got: $cpu_count" >&2
       exit 1
     fi
 
@@ -938,6 +969,17 @@ TMUXCONF
     # an address allocated per project.
     qemu_extra+=(-netdev "socket,id=lan0,mcast=$lan_group:44881" \
                  -device "virtio-net-device,netdev=lan0,mac=$lan_mac")
+
+    # Guest sizing (see the resolution block near the top): these ride
+    # CLAUDE_SANDBOX_VM_QEMU_ARGS into the extraArgsScript hook, whose output
+    # lands at the very end of QEMU's argv. Last-wins parsing makes them
+    # override the build-time -m/-smp, and the shared memfd backend — which
+    # the vhost-user shares require and which sizes the actual guest RAM —
+    # carries the memory override. Exactly one id=mem object exists (the
+    # build-time one was removed), since QEMU rejects duplicate IDs.
+    qemu_extra+=(-m "''${mem_mib}M" -smp "$cpu_count" \
+                 -object "memory-backend-memfd,id=mem,size=''${mem_mib}M,share=on" \
+                 -numa "node,memdev=mem")
 
     # microvm.nix starts QEMU with -nographic (no display device at all) and
     # wires the first serial port to stdio; the monitor would still try to mux

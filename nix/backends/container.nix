@@ -19,6 +19,12 @@
   nixos,
   # Toggle host network access (set false for private network)
   network ? true,
+  # Resource CEILINGS for the container (null = unlimited): the host's systemd
+  # enforces them on the machine's scope unit, even though the payload runs
+  # under --as-pid2. --mem/--cpus or CLAUDE_SANDBOX_MEM/CLAUDE_SANDBOX_CPUS
+  # override per launch.
+  mem ? null,  # MiB ceiling  → --property=MemoryMax=<n>M
+  cpus ? null, # whole-CPU ceiling → --property=CPUQuota=<n*100>%
   # Additional NixOS modules for the container
   extraModules ? [ ],
 }:
@@ -129,6 +135,8 @@ writeShellApplication {
 
     shell_mode=false
     gh_token=false
+    mem_max=""
+    cpu_max=""
     project_dir="."
     claude_args=()
 
@@ -140,6 +148,8 @@ writeShellApplication {
       echo "  Anything after '--' is passed straight to claude." >&2
       echo "  Automatically escalates to root via sudo if needed." >&2
       echo "" >&2
+      echo "  --mem MiB   Memory ceiling in MiB (default unlimited; env CLAUDE_SANDBOX_MEM)" >&2
+      echo "  --cpus N    CPU ceiling in whole CPUs (default unlimited; env CLAUDE_SANDBOX_CPUS)" >&2
       echo "  --shell     Drop into bash instead of launching claude" >&2
       echo "  --gh-token  Forward GH_TOKEN/GITHUB_TOKEN env vars into container" >&2
       echo "  --enter     Open a shell INSIDE this project's running container" >&2
@@ -151,6 +161,8 @@ writeShellApplication {
       case "$1" in
         --shell)    shell_mode=true; shift ;;
         --gh-token) gh_token=true; shift ;;
+        --mem)      mem_max="$2"; shift 2 ;;
+        --cpus)     cpu_max="$2"; shift 2 ;;
         --help|-h)  usage; exit 0 ;;
         --)         shift; claude_args=("$@"); break ;;
         -*)         echo "Unknown option: $1 (pass claude args after '--')" >&2; exit 1 ;;
@@ -398,6 +410,29 @@ writeShellApplication {
     network_args=()
     ${lib.optionalString (!network) ''network_args+=(--private-network)''}
 
+    # Resource ceilings (semantics in the derivation args): flags beat
+    # CLAUDE_SANDBOX_MEM/CLAUDE_SANDBOX_CPUS, which beat the build-time
+    # defaults. nspawn registers the machine's scope unit on the HOST's
+    # systemd even under --as-pid2, so the properties apply there and are
+    # visible via `machinectl show`.
+    resource_args=()
+    mem_mib="''${mem_max:-''${CLAUDE_SANDBOX_MEM:-${if mem == null then "" else toString mem}}}"
+    cpu_count="''${cpu_max:-''${CLAUDE_SANDBOX_CPUS:-${if cpus == null then "" else toString cpus}}}"
+    if [[ -n "$mem_mib" ]]; then
+      if ! [[ "$mem_mib" =~ ^[0-9]+$ ]]; then
+        echo "Error: --mem/CLAUDE_SANDBOX_MEM must be an integer (MiB), got: $mem_mib" >&2
+        exit 1
+      fi
+      resource_args+=("--property=MemoryMax=''${mem_mib}M")
+    fi
+    if [[ -n "$cpu_count" ]]; then
+      if ! [[ "$cpu_count" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --cpus/CLAUDE_SANDBOX_CPUS must be a positive integer, got: $cpu_count" >&2
+        exit 1
+      fi
+      resource_args+=("--property=CPUQuota=$(( cpu_count * 100 ))%")
+    fi
+
     # Select entrypoint and console mode
     console_args=()
     if [[ "$shell_mode" == true ]]; then
@@ -469,6 +504,7 @@ writeShellApplication {
       "''${gh_args[@]}" \
       "''${ssh_agent_args[@]}" \
       "''${network_args[@]}" \
+      "''${resource_args[@]}" \
       "''${api_key_args[@]}" \
       "''${locale_args[@]}" \
       "''${entrypoint_args[@]}" \

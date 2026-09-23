@@ -66,6 +66,10 @@ nix build github:jhhuh/claude-code-nix-sandbox#vm
 
 # Shell mode (tmux + bash)
 ./result/bin/claude-sandbox-vm --shell /path/to/project
+
+# Size the guest per launch (no rebuild; env: CLAUDE_SANDBOX_MEM / CLAUDE_SANDBOX_CPUS).
+# Container backend takes the same flags as ceilings (MemoryMax/CPUQuota).
+./result/bin/claude-sandbox-vm --mem 8192 --cpus 8 /path/to/project
 ```
 
 The guest is a NixOS system built with [microvm.nix](https://github.com/microvm-nix/microvm.nix) on QEMU, on the `microvm` machine type (no display device, no PCI — every device rides virtio-mmio). **KVM (`/dev/kvm`) is required**; to run it from inside a sandbox, use the `sandbox-kvm` package, which binds the device through. The host `/nix/store` is shared read-only and overlaid with a per-project writable layer, so no per-VM copy of the base image is written — only the delta. Every VM started from the same state root shares a private LAN and can reach the others.

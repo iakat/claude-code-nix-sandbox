@@ -72,10 +72,47 @@ in
       description = "Extra NixOS modules for the systemd-nspawn container.";
     };
 
+    container.mem = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = ''
+        Memory ceiling (systemd MemoryMax) for the container, in MiB.
+        null = unlimited. Per-launch override: --mem or CLAUDE_SANDBOX_MEM.
+      '';
+    };
+
+    container.cpus = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = ''
+        CPU ceiling (systemd CPUQuota) for the container, in whole CPUs.
+        null = unlimited. Per-launch override: --cpus or CLAUDE_SANDBOX_CPUS.
+      '';
+    };
+
     vm.extraModules = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [ ];
       description = "Extra NixOS modules for the QEMU VM.";
+    };
+
+    vm.mem = lib.mkOption {
+      type = lib.types.int;
+      default = 4096;
+      description = ''
+        Guest RAM for the QEMU VM, in MiB — the default a launch uses.
+        Per-launch override: --mem or CLAUDE_SANDBOX_MEM (2048 is rejected:
+        it hangs QEMU).
+      '';
+    };
+
+    vm.vcpu = lib.mkOption {
+      type = lib.types.int;
+      default = 4;
+      description = ''
+        Guest vCPU count for the QEMU VM — the default a launch uses.
+        Per-launch override: --cpus or CLAUDE_SANDBOX_CPUS.
+      '';
     };
   };
 
@@ -93,14 +130,14 @@ in
         (pkgs.callPackage ../../nix/backends/container.nix {
           inherit chromiumSandbox nixos;
           inherit (cfg) network;
-          inherit (cfg.container) extraModules;
+          inherit (cfg.container) mem cpus extraModules;
         })
       ++ lib.optional cfg.vm.enable
         (pkgs.callPackage ../../nix/backends/vm.nix {
           inherit nixos;
           microvm = claudeSandbox.microvm;
           inherit (cfg) network;
-          inherit (cfg.vm) extraModules;
+          inherit (cfg.vm) mem vcpu extraModules;
         });
 
     # Bubblewrap requires unprivileged user namespaces
