@@ -24,7 +24,7 @@
       # against its own pinned nixpkgs-unstable, and following ours would
       # invalidate that binary cache (see llm-agents' README).
       agentsFor = system:
-        with llm-agents.packages.${system}; { inherit claude-code omp dsh; };
+        with llm-agents.packages.${system}; { inherit claude-code omp dsh opencode oh-my-opencode hermes-agent hermes-hud paperclip ax apm ctx rtk opencode2; };
       # The ONLY overlay, and it is add-only: it introduces `sandboxSpec` and
       # `chromiumSandbox` without touching a single existing attribute, so
       # every nixpkgs store path — and therefore every cache hit — is bit-for-
