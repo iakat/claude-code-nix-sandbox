@@ -65,5 +65,5 @@ pkgs.callPackage ./nix/backends/bubblewrap.nix {
 
 ## Requirements
 
-- Linux with user namespace support (`security.unprivilegedUsernsClone = true` on NixOS)
+- Linux with user namespace support (`boot.kernel.sysctl."user.max_user_namespaces"` > 0 on NixOS — set automatically by the sandbox NixOS module)
 - X11 or Wayland display server

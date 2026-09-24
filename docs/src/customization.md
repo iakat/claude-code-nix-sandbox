@@ -106,22 +106,24 @@ packages.manager = pkgs.callPackage ./nix/manager/package.nix {
 ```nix
 {
   inputs.claude-sandbox.url = "github:jhhuh/claude-code-nix-sandbox";
-  inputs.claude-code-nix.url = "github:sadjow/claude-code-nix";
 
-  outputs = { nixpkgs, claude-sandbox, claude-code-nix, ... }:
-    let
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
-        overlays = [ claude-code-nix.overlays.default ];
-      };
-    in {
-      # Use a backend directly (needs claude-code-nix overlay for pkgs.claude-code)
-      packages.x86_64-linux.my-sandbox = pkgs.callPackage
-        "${claude-sandbox}/nix/backends/bubblewrap.nix"
-        { extraPackages = [ pkgs.python3 ]; };
-
-      # Or use the pre-built packages (overlay already applied)
-      packages.x86_64-linux.sandbox = claude-sandbox.packages.x86_64-linux.default;
-    };
+  outputs = { nixpkgs, claude-sandbox, ... }: {
+    # Use the pre-built packages. The agent harnesses (claude-code, omp, dsh)
+    # come from the flake's own llm-agents.nix input — nothing to wire up,
+    # no overlays in your configuration.
+    packages.x86_64-linux.sandbox = claude-sandbox.packages.x86_64-linux.sandbox;
+    packages.x86_64-linux.vm = claude-sandbox.packages.x86_64-linux.vm;
+  };
 }
+```
+
+Backends are also installable through the NixOS module (`claude-sandbox.nixosModules.default`), which resolves the agent packages and guest systems itself.
+
+To put an agent harness on the **host** (outside the sandbox), reach into the
+same llm-agents.nix input the flake already pins:
+
+```nix
+environment.systemPackages = [
+  claude-sandbox.inputs.llm-agents.packages.${pkgs.system}.claude-code
+];
 ```

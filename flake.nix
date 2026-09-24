@@ -3,20 +3,37 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    claude-code-nix.url = "github:sadjow/claude-code-nix";
-    claude-code-nix.inputs.nixpkgs.follows = "nixpkgs";
-    omp.url = "github:can1357/oh-my-pi";
-    omp.inputs.nixpkgs.follows = "nixpkgs";
+    llm-agents.url = "github:numtide/llm-agents.nix";
     microvm.url = "github:microvm-nix/microvm.nix";
     microvm.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix, omp, microvm }:
+  # llm-agents.nix publishes prebuilt packages on its own substituter.
+  nixConfig = {
+    extra-substituters = [ "https://cache.numtide.com" ];
+    extra-trusted-public-keys = [ "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=" ];
+  };
+
+  outputs = { self, nixpkgs, llm-agents, microvm }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-      sandboxOverlay = final: prev: {
-        sandboxSpec = import ./nix/sandbox-spec.nix { pkgs = final; };
+      # The agent harnesses, taken straight from llm-agents.nix's packages
+      # output and handed to the spec as plain store paths. Deliberately no
+      # `llm-agents.inputs.nixpkgs.follows`: its packages are built and cached
+      # against its own pinned nixpkgs-unstable, and following ours would
+      # invalidate that binary cache (see llm-agents' README).
+      agentsFor = system:
+        with llm-agents.packages.${system}; { inherit claude-code omp dsh; };
+      # The ONLY overlay, and it is add-only: it introduces `sandboxSpec` and
+      # `chromiumSandbox` without touching a single existing attribute, so
+      # every nixpkgs store path — and therefore every cache hit — is bit-for-
+      # bit identical to stock nixpkgs.
+      sandboxOverlay = system: final: prev: {
+        sandboxSpec = import ./nix/sandbox-spec.nix {
+          pkgs = final;
+          agents = agentsFor system;
+        };
         chromiumSandbox = prev.callPackage ./nix/chromium.nix {
           chromeExtensionIds = final.sandboxSpec.chromeExtensionIds;
         };
@@ -24,7 +41,7 @@
       pkgsFor = system: import nixpkgs {
         inherit system;
         config.allowUnfree = true;
-        overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ];
+        overlays = [ (sandboxOverlay system) ];
       };
     in
     {
@@ -35,7 +52,7 @@
             name = "claude-code-sandbox";
             paths = [
               (pkgs.callPackage ./nix/backends/bubblewrap.nix { })
-              pkgs.claude-code
+              (agentsFor system).claude-code
             ];
           };
 
@@ -54,7 +71,11 @@
           container = pkgs.callPackage ./nix/backends/container.nix {
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              # No overlays anywhere: spec.packages are pre-evaluated store
+              # paths passed in through the backend, and the guest modules
+              # only use stock nixpkgs attrs — so the guest fixpoint (and its
+              # cache hits) is pristine nixpkgs.
+              modules = args.imports;
             });
           };
 
@@ -62,7 +83,7 @@
             network = false;
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = args.imports;
             });
           };
 
@@ -71,7 +92,7 @@
             inherit microvm;
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = args.imports;
             });
           };
 
@@ -80,7 +101,7 @@
             network = false;
             nixos = args: (nixpkgs.lib.nixosSystem {
               inherit system;
-              modules = [ { nixpkgs.overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ]; } ] ++ args.imports;
+              modules = args.imports;
             });
           };
 
@@ -120,14 +141,14 @@
       # NixOS modules
       #
       # The sandbox module evaluates the container/VM guest systems itself, so
-      # it needs what only this flake has: the microvm.nix input, and the
-      # overlays that provide claude-code/omp (the host's pkgs cannot supply
-      # them). Both arrive as module arguments.
+      # it needs what only this flake has: the microvm.nix input and the
+      # llm-agents packages (the host's pkgs cannot supply either). Both
+      # arrive as module arguments — no overlays.
       nixosModules.default = { ... }: {
         imports = [ ./nix/modules/sandbox.nix ];
         _module.args.claudeSandbox = {
           inherit microvm;
-          overlays = [ claude-code-nix.overlays.default omp.overlays.default sandboxOverlay ];
+          agentPackages = llm-agents.packages;
         };
       };
       nixosModules.manager = ./nix/modules/manager.nix;

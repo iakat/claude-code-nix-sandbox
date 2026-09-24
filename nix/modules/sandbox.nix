@@ -12,22 +12,24 @@
 let
   cfg = config.services.claude-sandbox;
 
-  spec = import ../../nix/sandbox-spec.nix { inherit pkgs; };
+  # Agent harnesses come from this flake's llm-agents.nix input, passed in
+  # through `claudeSandbox` (see nixosModules.default in flake.nix) — the
+  # host's pkgs needs no overlay to see them.
+  agentPkgs = claudeSandbox.agentPackages.${pkgs.stdenv.hostPlatform.system};
+  agents = { inherit (agentPkgs) claude-code omp dsh; };
+
+  spec = import ../../nix/sandbox-spec.nix { inherit pkgs agents; };
 
   chromiumSandbox = pkgs.callPackage ../../nix/chromium.nix {
     chromeExtensionIds = spec.chromeExtensionIds;
   };
 
-  # Guest systems (container, VM) are evaluated here, so the overlays that
-  # provide claude-code and omp must be injected into every evaluation — they
-  # are not part of the host's pkgs. Both arrive from the flake through
-  # `claudeSandbox` (see nixosModules.default in flake.nix).
+  # Guest systems (container, VM) are evaluated here. They need no overlays:
+  # spec.packages are pre-evaluated store paths and the guest modules only
+  # use stock nixpkgs attrs, so the guest fixpoint is pristine nixpkgs.
   nixos = args: import "${pkgs.path}/nixos/lib/eval-config.nix" {
     modules = [
-      {
-        nixpkgs.overlays = claudeSandbox.overlays;
-        nixpkgs.config.allowUnfree = true;
-      }
+      { nixpkgs.config.allowUnfree = true; }
     ] ++ args.imports;
     system = pkgs.stdenv.hostPlatform.system;
   };
@@ -117,30 +119,35 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    nixpkgs.config.allowUnfree = true;
+    # No host `nixpkgs.config` / overlays needed: the agent harnesses arrive
+    # pre-evaluated through `claudeSandbox.agentPackages`, and every backend
+    # gets `spec` passed explicitly below.
 
     environment.systemPackages =
       lib.optional cfg.bubblewrap.enable
         (pkgs.callPackage ../../nix/backends/bubblewrap.nix {
-          inherit chromiumSandbox;
+          inherit spec chromiumSandbox;
           inherit (cfg) network;
           inherit (cfg.bubblewrap) extraPackages;
         })
       ++ lib.optional cfg.container.enable
         (pkgs.callPackage ../../nix/backends/container.nix {
-          inherit chromiumSandbox nixos;
+          inherit spec chromiumSandbox nixos;
           inherit (cfg) network;
           inherit (cfg.container) mem cpus extraModules;
         })
       ++ lib.optional cfg.vm.enable
         (pkgs.callPackage ../../nix/backends/vm.nix {
-          inherit nixos;
+          inherit spec nixos;
           microvm = claudeSandbox.microvm;
           inherit (cfg) network;
           inherit (cfg.vm) mem vcpu extraModules;
         });
 
-    # Bubblewrap requires unprivileged user namespaces
-    security.unprivilegedUsernsClone = lib.mkIf cfg.bubblewrap.enable true;
+    # Bubblewrap requires unprivileged user namespaces. The upstream
+    # `security.unprivilegedUsernsClone` option was removed from nixpkgs in
+    # favour of the sysctl — set it here (overridable by the user).
+    boot.kernel.sysctl."user.max_user_namespaces" =
+      lib.mkIf cfg.bubblewrap.enable (lib.mkDefault 15000);
   };
 }

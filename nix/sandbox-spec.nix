@@ -4,7 +4,12 @@
 # Programmatic fields (packages, chromeExtensionIds, hostEtcPaths) are consumed
 # directly by backends. Complex mechanisms (dotfile mounts, sockets, env vars)
 # stay as backend-specific code — see the documented checklist below.
-{ pkgs }:
+#
+# `agents` carries the agent harnesses from the flake's llm-agents.nix input
+# (claude-code, omp, dsh). They are passed in rather than resolved through
+# `pkgs` so that no nixpkgs instance — host, flake, or guest — needs an
+# overlay to provide them.
+{ pkgs, agents }:
 let
   # omp ("oh my pi", github:can1357/oh-my-pi) agent settings, seeded host-side
   # into ~/.omp/agent/config.yml ONLY when that file is missing. omp takes an
@@ -25,11 +30,15 @@ in
   # Chromium is intentionally excluded: bwrap uses chromiumSandbox wrapper,
   # container/VM use stock chromium. Each backend adds it separately.
   packages = with pkgs; [
-    claude-code
-    omp  # "oh my pi" (github:can1357/oh-my-pi) — a terminal AI coding agent,
-         # an alternative to claude-code. PATH-only: no launcher integration,
-         # run it from a shell inside the sandbox. Config + auth persist via
-         # the shared host ~/.omp (see ompConfigSnippet and the checklist).
+    agents.claude-code  # packaged by numtide/llm-agents.nix
+    agents.omp  # "oh my pi" (github:can1357/oh-my-pi) — a terminal AI coding
+                # agent, an alternative to claude-code. PATH-only: no launcher
+                # integration, run it from a shell inside the sandbox. Config
+                # + auth persist via the shared host ~/.omp (see
+                # ompConfigSnippet and the checklist).
+    agents.dsh  # DeepSeek's open-source agent harness
+                # (github:deepseek-ai/deepseek-harness) — PATH-only like omp:
+                # run it from a shell inside the sandbox.
     git
     gh
     openssh

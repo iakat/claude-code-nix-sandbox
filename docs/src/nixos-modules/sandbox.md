@@ -116,8 +116,12 @@ Guest vCPU count for the VM — the default a launch uses; per-launch override: 
 
 When enabled, the module also sets:
 
-- `nixpkgs.config.allowUnfree = true` — may be required depending on claude-code source
-- `security.unprivilegedUsernsClone = true` — when bubblewrap is enabled (required for user namespaces)
+- `boot.kernel.sysctl."user.max_user_namespaces" = 15000` — when bubblewrap is
+  enabled (required for unprivileged user namespaces; override freely)
+
+No host `nixpkgs.config` or overlays are touched: the agent harnesses
+(claude-code, omp, dsh) come pre-built from the flake's own `llm-agents.nix`
+input.
 
 ## Example with customization
 

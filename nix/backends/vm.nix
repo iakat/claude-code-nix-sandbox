@@ -26,6 +26,9 @@
   virtiofsd,
   microvm,
   nixos,
+  # Sandbox spec: defaults to the flake overlay's `pkgs.sandboxSpec`; the
+  # NixOS module passes its own so consumers without the overlay work too.
+  spec ? pkgs.sandboxSpec,
   # Toggle host network access (set false for isolated network)
   network ? true,
   # Guest RAM (MiB) and vCPU count — the DEFAULTS a launch uses. --mem/--cpus
@@ -39,8 +42,6 @@
 }:
 
 let
-  spec = import ../sandbox-spec.nix { inherit pkgs; };
-
   # MAC of the user-mode (NAT) NIC. It only has to be unique within this VM's
   # own slirp network, so it is a build-time constant. The guest matches it by
   # MAC rather than by name: microvm.nix leaves interface naming to the guest,

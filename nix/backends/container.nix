@@ -17,6 +17,9 @@
   chromiumSandbox,
   nix-ld,
   nixos,
+  # Sandbox spec: defaults to the flake overlay's `pkgs.sandboxSpec`; the
+  # NixOS module passes its own so consumers without the overlay work too.
+  spec ? pkgs.sandboxSpec,
   # Toggle host network access (set false for private network)
   network ? true,
   # Resource CEILINGS for the container (null = unlimited): the host's systemd
@@ -30,8 +33,6 @@
 }:
 
 let
-  spec = import ../sandbox-spec.nix { inherit pkgs; };
-
   containerSystem = nixos {
     imports = [
       ({ pkgs, ... }: {

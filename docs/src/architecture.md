@@ -47,7 +47,7 @@ tests/
 Each backend follows the same structure:
 
 1. **Nix function** with `{ lib, pkgs, writeShellApplication, ..., network ? true, extraPackages/extraModules ? [] }`
-2. **Import spec** — `spec = import ../sandbox-spec.nix { inherit pkgs; }` for packages and /etc paths
+2. **Import spec** — `spec = pkgs.sandboxSpec;` for packages and /etc paths. The flake's single add-only overlay builds it with the agent harnesses (claude-code, omp, dsh) from the `llm-agents.nix` input — agent packages never resolve through any nixpkgs fixpoint
 3. **Build a PATH or system closure** — `symlinkJoin` with `spec.packages` (bubblewrap) or `nixosSystem` with `spec.packages` in `environment.systemPackages` (container/VM)
 4. **Generate a shell script** via `writeShellApplication` that:
    - Parses the backend's flags (`--shell`, `--gh-token`, and for the VM `--stop`) and the project directory argument

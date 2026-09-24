@@ -92,11 +92,11 @@ claude-remote ui                          # SSH tunnel for web dashboard
 
 - **Pure Nix only**: no shell/Python wrappers for orchestration
 - **One backend per file** in `nix/backends/`
-- **Spec-driven**: `nix/sandbox-spec.nix` is the single source of truth for packages, extension IDs, and /etc paths. Backends import it and implement delivery. Chromium is excluded from spec because bwrap uses `chromiumSandbox` wrapper while container/VM use stock `chromium`
+- **Spec-driven**: `nix/sandbox-spec.nix` is the single source of truth for packages, extension IDs, and /etc paths. Backends consume it as `pkgs.sandboxSpec` and implement delivery. Chromium is excluded from spec because bwrap uses `chromiumSandbox` wrapper while container/VM use stock `chromium`
 - **Chromium from nixpkgs**: always `pkgs.chromium` inside the sandbox
-- **claude-code from `sadjow/claude-code-nix`**: flake input with overlay applied to `pkgsFor` and all `nixosSystem` calls; backends reference `pkgs.claude-code` which resolves through the overlay
-- **omp from `can1357/oh-my-pi`**: same overlay treatment as claude-code; ships in every sandbox via `spec.packages` (PATH-only, no launcher integration). Host `~/.omp` is shared rw in all backends; `agent/config.yml` is seeded host-side by copy when missing — omp flock-locks and rewrites it at runtime, so it must never be a store symlink or ro share
-- **Backends are callPackage-able**: called via `pkgs.callPackage` in flake.nix; `pkgs` param is auto-filled and used to evaluate the spec
+- **Agents from `numtide/llm-agents.nix`**: `claude-code`, `omp` (upstream can1357/oh-my-pi), and `dsh` (DeepSeek's harness, github:deepseek-ai/deepseek-harness) come from its `packages` output and reach the spec as an explicit `agents` arg — never through `pkgs`. Do NOT add `llm-agents.inputs.nixpkgs.follows`: its packages are CI-built against its own pinned nixpkgs-unstable and cached on `cache.numtide.com`; following our nixpkgs would force full source rebuilds. The only overlay is `sandboxOverlay` (per-system, add-only: `sandboxSpec` + `chromiumSandbox`), which cannot change any existing store path
+- **omp config seeding**: host `~/.omp` is shared rw in all backends; `agent/config.yml` is seeded host-side by copy when missing — omp flock-locks and rewrites it at runtime, so it must never be a store symlink or ro share
+- **Backends are callPackage-able**: called via `pkgs.callPackage` in flake.nix; `pkgs` param is auto-filled and `spec` resolves from `pkgs.sandboxSpec`
 - **NixOS modules**: `sandbox.nix` as `nixosModules.default`, `manager.nix` as `nixosModules.manager`
 - **Manager is Rust/Axum**: axum 0.7, askama 0.12, tower-http 0.5, sysinfo for metrics
 - **Manager static files**: vendored htmx + CSS, no npm/build step; askama compiles templates into the binary

@@ -16,6 +16,9 @@
   coreutils,
   util-linux,
   nix-ld,
+  # Sandbox spec: defaults to the flake overlay's `pkgs.sandboxSpec`; the
+  # NixOS module passes its own so consumers without the overlay work too.
+  spec ? pkgs.sandboxSpec,
   # Toggle host network access (set false to --unshare-net)
   network ? true,
   # Bind /dev/kvm into the sandbox (nested virt: lets the VM backend's QEMU
@@ -26,8 +29,6 @@
 }:
 
 let
-  spec = import ../sandbox-spec.nix { inherit pkgs; };
-
   sandboxPath = symlinkJoin {
     name = "claude-sandbox-path";
     paths = spec.packages ++ [ chromiumSandbox ] ++ extraPackages;
